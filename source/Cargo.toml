@@ -1,0 +1,13 @@
+[package]
+name = "slingwit"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+aargvark = { version = "0.6.5", features = ["serde_json"] }
+loga = "0.5.2"
+serde = { version = "1.0.215", features = ["derive"] }
+serde_json = "1.0.133"
+structre = "0.2.0"
+taskmanager = "0.6.2"
+tokio = { version = "1.41.1", features = ["process", "macros", "rt"] }

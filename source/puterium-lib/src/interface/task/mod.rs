@@ -1,5 +1,6 @@
 use {
     crate::duration::SimpleDuration,
+    schemars::JsonSchema,
     serde::{
         Deserialize,
         Serialize,
@@ -10,7 +11,7 @@ use {
     },
 };
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, JsonSchema, PartialEq, Eq)]
 #[serde(rename = "snake_case", deny_unknown_fields)]
 pub struct Environment {
     /// If present, a map of environment variables and a bool, whether inherit from the
@@ -30,24 +31,48 @@ impl Default for Environment {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, JsonSchema, PartialEq, Eq)]
 #[serde(rename = "snake_case", deny_unknown_fields)]
-pub struct RestartConfig {
+pub struct PerpetualTaskRestartConfig {
     /// How long to wait before restarting the task. Defaults to 1 minute.
     pub delay: Option<SimpleDuration>,
+}
+
+impl Default for PerpetualTaskRestartConfig {
+    fn default() -> Self {
+        Self { delay: None }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, JsonSchema, PartialEq, Eq)]
+#[serde(rename = "snake_case", deny_unknown_fields)]
+pub struct FiniteTaskRestartConfig {
+    /// Which exit codes are considered successful - by default `[0]`.
+    pub success_codes: Vec<i32>,
+    /// How long to wait before restarting the task. Defaults to 1 minute.
+    pub delay: Option<SimpleDuration>,
+}
+
+impl Default for FiniteTaskRestartConfig {
+    fn default() -> Self {
+        Self {
+            success_codes: vec![],
+            delay: None,
+        }
+    }
 }
 
 /// All dependencies will prevent the dependent from starting until they've reached
 /// started state, and cause the dependent to stop when they leave started state.
 /// Additional behaviors are indicated in this struct.
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 #[serde(rename = "snake_case", deny_unknown_fields)]
 pub struct DependencyInfo {
     /// Sets `transitive_on` in the dependency when the dependent is `on`.
     pub set_transitive_on: bool,
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, PartialEq, Eq)]
 #[serde(rename = "snake_case", deny_unknown_fields)]
 pub enum FiniteTaskEndAction {
     /// Nothing happens, task continues to be considered on and started.
@@ -65,7 +90,7 @@ impl Default for FiniteTaskEndAction {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone, PartialEq, Eq)]
 #[serde(rename = "snake_case", deny_unknown_fields)]
 pub struct TaskSpecEmpty {
     #[serde(default)]
@@ -74,7 +99,7 @@ pub struct TaskSpecEmpty {
     pub default_off: bool,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone, PartialEq, Eq)]
 #[serde(rename = "snake_case", deny_unknown_fields)]
 pub struct TaskSpecPerpetual {
     #[serde(default)]
@@ -88,10 +113,10 @@ pub struct TaskSpecPerpetual {
     pub command: Vec<String>,
     /// Restart the command if it fails or unexpectedly exits
     #[serde(default)]
-    pub restart: Option<RestartConfig>,
+    pub restart: Option<PerpetualTaskRestartConfig>,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone, PartialEq, Eq)]
 #[serde(rename = "snake_case", deny_unknown_fields)]
 pub struct TaskSpecFinite {
     #[serde(default)]
@@ -105,7 +130,7 @@ pub struct TaskSpecFinite {
     pub command: Vec<String>,
     /// Restart the command if it fails
     #[serde(default)]
-    pub restart: Option<RestartConfig>,
+    pub restart: Option<FiniteTaskRestartConfig>,
     /// Kill the one-shot command if it doesn't complete in this amount of time.
     #[serde(default)]
     pub timeout: Option<SimpleDuration>,
@@ -116,7 +141,7 @@ pub struct TaskSpecFinite {
     pub success_codes: Vec<u16>,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone)]
 #[serde(rename = "snake_case", deny_unknown_fields)]
 pub enum Task {
     /// This is a task that has no internal state or process, etc, but can be used as a
@@ -135,7 +160,7 @@ pub enum Task {
     /// Finite tasks are considered started once they successfully exit.
     Finite(TaskSpecFinite),
     /// An external task is a task where the state is determined by an external process
-    /// that communicates with slingwit via API to communicate state changes.  Since it
+    /// that communicates with puterium via API to communicate state changes.  Since it
     /// is externally managed, it can have no dependencies.
     ///
     /// When the task is set `user_on`, it is immediately also considered `started`

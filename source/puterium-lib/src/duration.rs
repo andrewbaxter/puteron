@@ -1,22 +1,41 @@
 use {
+    schemars::{
+        schema::{
+            InstanceType,
+            SchemaObject,
+            StringValidation,
+        },
+        JsonSchema,
+    },
     serde::{
         Deserialize,
         Serialize,
     },
+    std::time::Duration,
     structre::structre,
 };
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum SimpleDurationUnit {
     Second,
     Minute,
     Hour,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct SimpleDuration {
-    pub count: usize,
+    pub count: u64,
     pub unit: SimpleDurationUnit,
+}
+
+impl Into<Duration> for SimpleDuration {
+    fn into(self) -> Duration {
+        match self.unit {
+            SimpleDurationUnit::Second => return Duration::from_secs(self.count),
+            SimpleDurationUnit::Minute => return Duration::from_secs(self.count * 60),
+            SimpleDurationUnit::Hour => return Duration::from_secs(self.count * 60 * 60),
+        }
+    }
 }
 
 pub const SUFFIX_SECOND: &str = "s";
@@ -41,7 +60,7 @@ impl<'de> Deserialize<'de> for SimpleDuration {
         D: serde::Deserializer<'de> {
         #[structre("(?<count>\\d+)(?<unit>[a-z]+)")]
         struct Parser<'a> {
-            count: usize,
+            count: u64,
             unit: &'a str,
         }
 
@@ -56,5 +75,22 @@ impl<'de> Deserialize<'de> for SimpleDuration {
                 s => return Err(serde::de::Error::custom(format!("Unknown time unit suffix [{}]", s))),
             },
         });
+    }
+}
+
+impl JsonSchema for SimpleDuration {
+    fn schema_name() -> String {
+        return "Duration".to_string();
+    }
+
+    fn json_schema(_gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
+        return SchemaObject {
+            instance_type: Some(InstanceType::String.into()),
+            string: Some(Box::new(StringValidation {
+                pattern: Some("(\\d+)([hms])".to_string()),
+                ..Default::default()
+            })),
+            ..Default::default()
+        }.into();
     }
 }

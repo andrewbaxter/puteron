@@ -16,9 +16,9 @@ Here's a quick comparison to SystemD:
 
 1. Define tasks (services, processes, jobs) as JSON
 
-2. Either put them in an autoload directory or call `slingwit task create task.json` once slingwit is running
+2. Either put them in an autoload directory or call `puterium task create task.json` once puterium is running
 
-3. Run slingwit with `slingwit demon run`
+3. Run puterium with `puterium demon run`
 
 # Graph logic
 
@@ -34,9 +34,9 @@ Tasks are either on or off (control state), and started or stopped (actual state
 
 These are logically-unioned to produce `on`. To put it another way, a task is `on` if 1. the user says they need it on or 2. if any other task the user says they need on (transitively) needs it.
 
-If a task is `on` slingwit will try to make sure it's running (start it, restart it if it failed, etc). If a task is `off` slingwit will try to make sure it's not running (stop it, force kill it if that fails).
+If a task is `on` puterium will try to make sure it's running (start it, restart it if it failed, etc). If a task is `off` puterium will try to make sure it's not running (stop it, force kill it if that fails).
 
-You can visualize this for a task with `slingwit task why-on`.
+You can visualize this for a task with `puterium task why-on`.
 
 ### Actual state
 

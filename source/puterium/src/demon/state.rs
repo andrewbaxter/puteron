@@ -7,7 +7,7 @@ use {
         self,
         base::TaskId,
         message::v1::ProcState,
-        task::DependencyInfo,
+        task::DependencyType,
     },
     slotmap::{
         new_key_type,
@@ -41,7 +41,7 @@ pub(crate) struct TaskStatePerpetual {
 pub(crate) struct TaskStateFinite {
     pub(crate) state: Cell<(ProcState, DateTime<Utc>)>,
     pub(crate) pid: Cell<Option<i32>>,
-    pub(crate) restart_count: Cell<usize>,
+    pub(crate) failed_start_count: Cell<usize>,
     pub(crate) stop: RefCell<Option<oneshot::Sender<()>>>,
     pub(crate) spec: interface::task::TaskSpecFinite,
 }
@@ -55,9 +55,9 @@ pub(crate) enum TaskStateSpecific {
 
 pub(crate) struct TaskState_ {
     pub(crate) id: TaskId,
-    pub(crate) direct_on: Cell<(bool, DateTime<Utc>)>,
+    pub(crate) user_on: Cell<(bool, DateTime<Utc>)>,
     pub(crate) transitive_on: Cell<(bool, DateTime<Utc>)>,
-    pub(crate) downstream: RefCell<HashMap<TaskId, DependencyInfo>>,
+    pub(crate) downstream: RefCell<HashMap<TaskId, DependencyType>>,
     pub(crate) specific: TaskStateSpecific,
     pub(crate) started_waiters: RefCell<Vec<oneshot::Sender<bool>>>,
     pub(crate) stopped_waiters: RefCell<Vec<oneshot::Sender<bool>>>,
@@ -92,13 +92,13 @@ pub(crate) fn task_started(t: &TaskState_) -> bool {
 }
 
 pub(crate) fn task_on(t: &TaskState_) -> bool {
-    return t.direct_on.get().0 || t.transitive_on.get().0;
+    return t.user_on.get().0 || t.transitive_on.get().0;
 }
 
 pub(crate) fn upstream<
     'a,
     T,
->(t: &'a TaskState_, mut cb: impl FnMut(&mut dyn Iterator<Item = (&'a TaskId, &'a DependencyInfo)>) -> T) -> T {
+>(t: &'a TaskState_, mut cb: impl FnMut(&mut dyn Iterator<Item = (&'a TaskId, &'a DependencyType)>) -> T) -> T {
     match &t.specific {
         TaskStateSpecific::Empty(s) => return cb(&mut s.spec.upstream.iter()),
         TaskStateSpecific::Perpetual(s) => return cb(&mut s.spec.upstream.iter()),

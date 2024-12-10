@@ -3,7 +3,6 @@ use {
         ErrContext,
         ResultContext,
     },
-    rustix::process::Uid,
     serde::de::DeserializeOwned,
     std::{
         env,
@@ -23,14 +22,10 @@ use {
 };
 
 pub(crate) fn ipc_path() -> Option<PathBuf> {
-    if let Ok(p) = env::var("puterium_IPC_SOCK") {
+    if let Ok(p) = env::var("PUTERIUM_IPC_SOCK") {
         return Some(PathBuf::from(p));
     }
-    if rustix::process::geteuid() == Uid::ROOT {
-        return None;
-    } else {
-        return Some(PathBuf::from("/run/puterium.sock"));
-    }
+    return Some(PathBuf::from("/run/puterium.sock"));
 }
 
 pub(crate) async fn write(conn: &mut UnixStream, message: &[u8]) -> Result<(), loga::Error> {

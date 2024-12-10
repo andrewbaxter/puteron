@@ -32,8 +32,14 @@ pub(crate) fn merge_specs(
                 );
             },
         };
+        let mut dir_entries1 = vec![];
         for e in dir_entries {
             let e = e.context("Error reading task directory entry")?;
+            dir_entries1.push(e);
+        }
+        dir_entries1.sort_by_cached_key(|k| k.file_name());
+        let dir_entries = dir_entries1;
+        for e in dir_entries {
             let path = e.path();
             let task_name =
                 String::from_utf8(

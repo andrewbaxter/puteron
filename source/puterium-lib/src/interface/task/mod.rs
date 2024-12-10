@@ -7,6 +7,7 @@ use {
     },
     std::{
         collections::HashMap,
+        net::SocketAddr,
         path::PathBuf,
     },
 };
@@ -31,45 +32,16 @@ impl Default for Environment {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, JsonSchema, PartialEq, Eq)]
-#[serde(rename = "snake_case", deny_unknown_fields)]
-pub struct PerpetualTaskRestartConfig {
-    /// How long to wait before restarting the task. Defaults to 1 minute.
-    pub delay: Option<SimpleDuration>,
-}
-
-impl Default for PerpetualTaskRestartConfig {
-    fn default() -> Self {
-        Self { delay: None }
-    }
-}
-
-#[derive(Serialize, Deserialize, Clone, JsonSchema, PartialEq, Eq)]
-#[serde(rename = "snake_case", deny_unknown_fields)]
-pub struct FiniteTaskRestartConfig {
-    /// Which exit codes are considered successful - by default `[0]`.
-    pub success_codes: Vec<i32>,
-    /// How long to wait before restarting the task. Defaults to 1 minute.
-    pub delay: Option<SimpleDuration>,
-}
-
-impl Default for FiniteTaskRestartConfig {
-    fn default() -> Self {
-        Self {
-            success_codes: vec![],
-            delay: None,
-        }
-    }
-}
-
 /// All dependencies will prevent the dependent from starting until they've reached
 /// started state, and cause the dependent to stop when they leave started state.
 /// Additional behaviors are indicated in this struct.
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 #[serde(rename = "snake_case", deny_unknown_fields)]
-pub struct DependencyInfo {
-    /// Sets `transitive_on` in the dependency when the dependent is `on`.
-    pub set_transitive_on: bool,
+pub enum DependencyType {
+    /// Sets `transitive_on` in the dependency when the dependent is `on` (i.e. turns
+    /// on deps that are off).
+    Strong,
+    Weak,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, PartialEq, Eq)]
@@ -94,51 +66,72 @@ impl Default for FiniteTaskEndAction {
 #[serde(rename = "snake_case", deny_unknown_fields)]
 pub struct TaskSpecEmpty {
     #[serde(default)]
-    pub upstream: HashMap<String, DependencyInfo>,
+    pub upstream: HashMap<String, DependencyType>,
     #[serde(default)]
     pub default_off: bool,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, PartialEq, Eq)]
+#[serde(rename = "snake_case", deny_unknown_fields)]
+pub struct Command {
+    #[serde(default)]
+    pub working_directory: Option<PathBuf>,
+    #[serde(default)]
+    pub environment: Environment,
+    pub command: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, PartialEq, Eq)]
+#[serde(rename = "snake_case", deny_unknown_fields)]
+pub enum StartedCheck {
+    /// Consider started when this tcp socket has a listener
+    TcpSocket(SocketAddr),
+    /// Consider started when a file exists at the following path
+    Path(PathBuf),
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, PartialEq, Eq)]
 #[serde(rename = "snake_case", deny_unknown_fields)]
 pub struct TaskSpecPerpetual {
     #[serde(default)]
-    pub upstream: HashMap<String, DependencyInfo>,
+    pub upstream: HashMap<String, DependencyType>,
     #[serde(default)]
     pub default_off: bool,
+    /// Command to run
+    pub command: Command,
+    /// How to determine if command has started - otherwise immediately transition to
+    /// started from starting.
     #[serde(default)]
-    pub working_directory: Option<PathBuf>,
+    pub started_check: Option<StartedCheck>,
+    /// How long to wait between restarts when the command fails. Defaults to 60s.
     #[serde(default)]
-    pub environment: Environment,
-    pub command: Vec<String>,
-    /// Restart the command if it fails or unexpectedly exits
-    #[serde(default)]
-    pub restart: Option<PerpetualTaskRestartConfig>,
+    pub restart_delay: Option<SimpleDuration>,
+    /// How long to wait before force killing the process if it fails to stop. Defaults
+    /// to 30s.
+    pub stop_timeout: Option<SimpleDuration>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, PartialEq, Eq)]
 #[serde(rename = "snake_case", deny_unknown_fields)]
 pub struct TaskSpecFinite {
     #[serde(default)]
-    pub upstream: HashMap<String, DependencyInfo>,
+    pub upstream: HashMap<String, DependencyType>,
     #[serde(default)]
     pub default_off: bool,
-    #[serde(default)]
-    pub working_directory: Option<PathBuf>,
-    #[serde(default)]
-    pub environment: Environment,
-    pub command: Vec<String>,
-    /// Restart the command if it fails
-    #[serde(default)]
-    pub restart: Option<FiniteTaskRestartConfig>,
-    /// Kill the one-shot command if it doesn't complete in this amount of time.
-    #[serde(default)]
-    pub timeout: Option<SimpleDuration>,
-    #[serde(default)]
-    pub end_action: FiniteTaskEndAction,
+    /// Command to run
+    pub command: Command,
     /// Which exit codes are considered success.  By default, `0`.
     #[serde(default)]
-    pub success_codes: Vec<u16>,
+    pub success_codes: Vec<i32>,
+    /// What to do when the command succeeds
+    #[serde(default)]
+    pub started_action: FiniteTaskEndAction,
+    /// How long to wait between restarts when the command exits. Defaults to 60s.
+    #[serde(default)]
+    pub restart_delay: Option<SimpleDuration>,
+    /// How long to wait before force killing the process if it fails to stop. Defaults
+    /// to 30s.
+    pub stop_timeout: Option<SimpleDuration>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone)]

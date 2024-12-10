@@ -1,7 +1,10 @@
 use {
     crate::interface::{
         base::TaskId,
-        task::Task,
+        task::{
+            DependencyType,
+            Task,
+        },
     },
     chrono::{
         DateTime,
@@ -189,7 +192,7 @@ pub struct TaskUpstreamStatus {
     pub task: TaskId,
     pub on: bool,
     pub started: bool,
-    pub strong: bool,
+    pub dependency_type: DependencyType,
     pub related: HashMap<TaskId, TaskUpstreamStatus>,
 }
 

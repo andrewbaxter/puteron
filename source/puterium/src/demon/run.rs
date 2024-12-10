@@ -28,14 +28,6 @@ use {
         DebugDisplay,
         ResultContext,
     },
-    rustix::{
-        process::Signal,
-        termios::Pid,
-    },
-    serde::{
-        Deserialize,
-        Serialize,
-    },
     puterium_lib::{
         duration::SimpleDuration,
         interface::{
@@ -49,11 +41,18 @@ use {
                 TaskUpstreamStatus,
             },
             task::{
-                DependencyInfo,
-                Environment,
+                DependencyType,
                 Task,
             },
         },
+    },
+    rustix::{
+        process::Signal,
+        termios::Pid,
+    },
+    serde::{
+        Deserialize,
+        Serialize,
     },
     std::{
         cell::{
@@ -82,6 +81,7 @@ use {
             BufReader,
         },
         net::{
+            TcpStream,
             UnixListener,
             UnixStream,
         },
@@ -95,7 +95,10 @@ use {
         spawn,
         sync::oneshot,
         task::JoinError,
-        time::sleep,
+        time::{
+            sleep,
+            timeout,
+        },
     },
     tokio_stream::{
         wrappers::LinesStream,
@@ -167,7 +170,7 @@ pub(crate) fn main(args: DemonRunArgs) -> Result<(), loga::Error> {
         let mut state_dynamic = state.dynamic.lock().unwrap();
 
         // # Create task states from specs
-        let mut dependents = HashMap::<TaskId, HashMap<TaskId, DependencyInfo>>::new();
+        let mut dependents = HashMap::<TaskId, HashMap<TaskId, DependencyType>>::new();
         for (id, spec) in specs {
             let task = state_dynamic.task_alloc.insert(build_task(&mut dependents, id.clone(), spec));
             state_dynamic.tasks.insert(id, task);
@@ -199,7 +202,7 @@ pub(crate) fn main(args: DemonRunArgs) -> Result<(), loga::Error> {
 
     // # Start async
     let rt = runtime::Builder::new_multi_thread().enable_all().build().context("Error starting async runtime")?;
-    return rt.block_on(async move {
+    rt.block_on(async move {
         ta_return!((), loga::Error);
         {
             let state_dynamic = state.dynamic.lock().unwrap();
@@ -235,11 +238,20 @@ pub(crate) fn main(args: DemonRunArgs) -> Result<(), loga::Error> {
             let mut sigint = Box::pin(sigint.recv());
             let mut sigterm = Box::pin(sigterm.recv());
             loop {
+                fn task_off_all(state: &Arc<State>) {
+                    let state_dynamic = state.dynamic.lock().unwrap();
+                    for task_id in state_dynamic.tasks.keys() {
+                        set_task_user_off(&state_dynamic, task_id);
+                    }
+                }
+
                 select!{
                     _ =& mut sigint => {
+                        task_off_all(&state);
                         break;
                     },
                     _ =& mut sigterm => {
+                        task_off_all(&state);
                         break;
                     }
                     accepted = message_socket.accept() => {
@@ -272,7 +284,9 @@ pub(crate) fn main(args: DemonRunArgs) -> Result<(), loga::Error> {
             }
         }
         return Ok(());
-    });
+    })?;
+    rt.shutdown_timeout(Duration::MAX);
+    return Ok(());
 }
 
 fn task_find_cycles(
@@ -331,7 +345,7 @@ fn delete_task(state_dynamic: &mut StateDynamic, task_id: &TaskId) {
 }
 
 fn build_task(
-    dependents: &mut HashMap::<TaskId, HashMap<TaskId, DependencyInfo>>,
+    dependents: &mut HashMap::<TaskId, HashMap<TaskId, DependencyType>>,
     task_id: TaskId,
     spec: Task,
 ) -> TaskState_ {
@@ -370,7 +384,7 @@ fn build_task(
                 state: Cell::new((ProcState::Stopped, Utc::now())),
                 stop: RefCell::new(None),
                 pid: Cell::new(None),
-                restart_count: Cell::new(0),
+                failed_start_count: Cell::new(0),
             });
         },
         interface::task::Task::External => {
@@ -379,7 +393,7 @@ fn build_task(
     }
     return TaskState_ {
         id: task_id.clone(),
-        direct_on: Cell::new((false, Utc::now())),
+        user_on: Cell::new((false, Utc::now())),
         transitive_on: Cell::new((false, Utc::now())),
         downstream: RefCell::new(HashMap::new()),
         specific: specific,
@@ -474,8 +488,8 @@ async fn handle_ipc(state: Arc<State>, peer: PathBuf, mut conn: UnixStream) {
                             };
                             let task = &state_dynamic.task_alloc[*task];
                             return Ok(TaskStatus {
-                                direct_on: task.direct_on.get().0,
-                                direct_on_at: task.direct_on.get().1,
+                                direct_on: task.user_on.get().0,
+                                direct_on_at: task.user_on.get().1,
                                 transitive_on: task.transitive_on.get().0,
                                 transitive_on_at: task.transitive_on.get().1,
                                 specific: match &task.specific {
@@ -502,7 +516,7 @@ async fn handle_ipc(state: Arc<State>, peer: PathBuf, mut conn: UnixStream) {
                                             state: s.state.get().0,
                                             state_at: s.state.get().1,
                                             pid: s.pid.get(),
-                                            restarts: s.restart_count.get(),
+                                            restarts: s.failed_start_count.get(),
                                         },
                                     ),
                                     TaskStateSpecific::External => interface
@@ -608,8 +622,8 @@ async fn handle_ipc(state: Arc<State>, peer: PathBuf, mut conn: UnixStream) {
                             let state_dynamic = state.dynamic.lock().unwrap();
                             let mut out_stack = vec![];
                             let mut root = None;
-                            let mut frontier = vec![(true, m.0.clone(), true)];
-                            while let Some((first, task_id, strong)) = frontier.pop() {
+                            let mut frontier = vec![(true, m.0.clone(), DependencyType::Strong)];
+                            while let Some((first, task_id, dependency_type)) = frontier.pop() {
                                 if first {
                                     let Some(task) = state_dynamic.tasks.get(&m.0) else {
                                         return Err(format!("Unknown task [{}]", m.0));
@@ -619,13 +633,16 @@ async fn handle_ipc(state: Arc<State>, peer: PathBuf, mut conn: UnixStream) {
                                         task: task_id.clone(),
                                         on: task_on(task),
                                         started: task_started(task),
-                                        strong: strong,
+                                        dependency_type: dependency_type,
                                         related: HashMap::new(),
                                     });
-                                    frontier.push((false, task_id, strong));
+                                    frontier.push((false, task_id, dependency_type));
                                     upstream(task, |upstream| {
-                                        for (dep_id, dep_info) in upstream {
-                                            frontier.push((true, dep_id.clone(), dep_info.set_transitive_on));
+                                        for (next_id, next_dep_type) in upstream {
+                                            frontier.push((true, next_id.clone(), match dependency_type {
+                                                DependencyType::Strong => *next_dep_type,
+                                                DependencyType::Weak => DependencyType::Weak,
+                                            }));
                                         }
                                     });
                                 } else {
@@ -731,16 +748,14 @@ fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, task: &TaskSt
     fn spawn_proc(
         base_env: &HashMap<String, String>,
         task_id: &TaskId,
-        spec_command: &Vec<String>,
-        spec_working_directory: &Option<PathBuf>,
-        spec_environment: &Environment,
+        spec: &interface::task::Command,
     ) -> Result<(Child, Pid, LoggerRetFuture), loga::Error> {
         // Prep command and args
-        let mut command = Command::new(&spec_command[0]);
-        command.args(&spec_command[1..]);
+        let mut command = Command::new(&spec.command[0]);
+        command.args(&spec.command[1..]);
 
         // Working dir
-        match &spec_working_directory {
+        match &spec.working_directory {
             Some(w) => {
                 command.current_dir(w);
             },
@@ -750,7 +765,7 @@ fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, task: &TaskSt
         }
 
         // Env vars
-        if let Some(clear_env) = &spec_environment.clear {
+        if let Some(clear_env) = &spec.environment.clear {
             command.env_clear();
             for (k, keep) in clear_env {
                 if !keep {
@@ -761,7 +776,7 @@ fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, task: &TaskSt
                 }
             }
         }
-        for (k, v) in &spec_environment.add {
+        for (k, v) in &spec.environment.add {
             command.env(k, v);
         }
 
@@ -807,7 +822,12 @@ fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, task: &TaskSt
         return Ok((child, pid, logger));
     }
 
-    async fn gentle_stop_proc(pid: Pid, mut child: Child, logger: LoggerRetFuture) -> Result<(), loga::Error> {
+    async fn gentle_stop_proc(
+        pid: Pid,
+        mut child: Child,
+        logger: LoggerRetFuture,
+        stop_timeout: Option<SimpleDuration>,
+    ) -> Result<(), loga::Error> {
         if let Err(e) = rustix::process::kill_process(pid, Signal::Term) {
             warn!(err =? e, "Error sending TERM to child");
         }
@@ -818,7 +838,7 @@ fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, task: &TaskSt
                     warn!(err =? e, "Error sending message to syslog");
                 }
             },
-            _ = sleep(Duration::from_secs(30)) => {
+            _ = sleep(stop_timeout.map(|x| x.into()).unwrap_or(Duration::from_secs(30))) => {
                 if let Err(e) = rustix::process::kill_process(pid, Signal::Kill) {
                     warn!(err =? e, "Error sending KILL to child");
                 }
@@ -872,22 +892,14 @@ fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, task: &TaskSt
             let task_id = task.id.clone();
             let state = state.clone();
             spawn(async move {
-                let restart = spec.restart.unwrap_or_default();
-                let restart_delay = Duration::from(restart.delay.unwrap_or(SimpleDuration {
+                let restart_delay = Duration::from(spec.restart_delay.unwrap_or(SimpleDuration {
                     count: 1,
                     unit: puterium_lib::duration::SimpleDurationUnit::Minute,
                 }).into());
                 loop {
                     match async {
                         ta_return!(bool, loga::Error);
-                        let (mut child, pid, logger) =
-                            spawn_proc(
-                                &state.env,
-                                &task_id,
-                                &spec.command,
-                                &spec.working_directory,
-                                &spec.environment,
-                            )?;
+                        let (mut child, pid, logger) = spawn_proc(&state.env, &task_id, &spec.command)?;
                         {
                             let state_dynamic = state.dynamic.lock().unwrap();
                             let task = &state_dynamic.task_alloc[*state_dynamic.tasks.get(&task_id).unwrap()];
@@ -896,21 +908,78 @@ fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, task: &TaskSt
                             };
                             specific.pid.set(Some(pid.as_raw_nonzero().get()));
                         }
+                        let live_work = async {
+                            // Started check
+                            match &spec.started_check {
+                                None => { },
+                                Some(c) => match c {
+                                    interface::task::StartedCheck::TcpSocket(addr) => {
+                                        loop {
+                                            if timeout(Duration::from_secs(1), TcpStream::connect(addr))
+                                                .await
+                                                .is_ok() {
+                                                break;
+                                            }
+                                            sleep(Duration::from_secs(1)).await;
+                                        }
+                                    },
+                                    interface::task::StartedCheck::Path(c) => {
+                                        loop {
+                                            if c.exists() {
+                                                break;
+                                            }
+                                            sleep(Duration::from_secs(1)).await;
+                                        }
+                                    },
+                                },
+                            }
+                            {
+                                let state_dynamic = state.dynamic.lock().unwrap();
+                                let task = &state_dynamic.task_alloc[*state_dynamic.tasks.get(&task_id).unwrap()];
+                                let TaskStateSpecific::Perpetual(specific) = &task.specific else {
+                                    panic!();
+                                };
+                                specific.state.set((ProcState::Started, Utc::now()));
+                                specific.failed_start_count.set(0);
+                                on_started(&state, &state_dynamic, &task_id);
+                            }
 
-                        // Started check
-                        {
-                            let state_dynamic = state.dynamic.lock().unwrap();
-                            let task = &state_dynamic.task_alloc[*state_dynamic.tasks.get(&task_id).unwrap()];
-                            let TaskStateSpecific::Perpetual(specific) = &task.specific else {
-                                panic!();
-                            };
-                            specific.state.set((ProcState::Started, Utc::now()));
-                            specific.failed_start_count.set(0);
-                            on_started(&state, &state_dynamic, &task_id);
-                        }
-
-                        // Wait for exit
+                            // Do nothing forever
+                            loop {
+                                sleep(Duration::MAX).await;
+                            }
+                        };
                         select!{
+                            _ = live_work => {
+                                unreachable!();
+                            },
+                            _ =& mut stop_rx => {
+                                // Mark as stopping + do state updates
+                                {
+                                    let state_dynamic = state.dynamic.lock().unwrap();
+                                    let task = &state_dynamic.task_alloc[*state_dynamic.tasks.get(&task_id).unwrap()];
+                                    let TaskStateSpecific::Perpetual(specific) = &task.specific else {
+                                        panic!();
+                                    };
+                                    specific.state.set((ProcState::Stopping, Utc::now()));
+                                    on_stopping(&state_dynamic, &task_id);
+                                }
+
+                                // Signal stop
+                                gentle_stop_proc(pid, child, logger, spec.stop_timeout).await?;
+
+                                // Mark as stopped
+                                {
+                                    let state_dynamic = state.dynamic.lock().unwrap();
+                                    let task = &state_dynamic.task_alloc[*state_dynamic.tasks.get(&task_id).unwrap()];
+                                    let TaskStateSpecific::Perpetual(specific) = &task.specific else {
+                                        panic!();
+                                    };
+                                    specific.state.set((ProcState::Stopped, Utc::now()));
+                                    specific.pid.set(None);
+                                }
+                                return Ok(true);
+                            },
                             r = child.wait() => {
                                 let mut logger = logger.await?;
                                 if let Err(e) = logger.info(format!("Process ended with status: {:?}", r)) {
@@ -929,33 +998,7 @@ fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, task: &TaskSt
                                 }
                                 return Ok(false);
                             }
-                            _ =& mut stop_rx => {
-                                // Mark as stopping + do state updates
-                                {
-                                    let state_dynamic = state.dynamic.lock().unwrap();
-                                    let task = &state_dynamic.task_alloc[*state_dynamic.tasks.get(&task_id).unwrap()];
-                                    let TaskStateSpecific::Perpetual(specific) = &task.specific else {
-                                        panic!();
-                                    };
-                                    specific.state.set((ProcState::Stopping, Utc::now()));
-                                    on_stopping(&state_dynamic, &task_id);
-                                }
-
-                                // Signal stop
-                                gentle_stop_proc(pid, child, logger).await?;
-
-                                // Mark as stopped
-                                {
-                                    let state_dynamic = state.dynamic.lock().unwrap();
-                                    let task = &state_dynamic.task_alloc[*state_dynamic.tasks.get(&task_id).unwrap()];
-                                    let TaskStateSpecific::Perpetual(specific) = &task.specific else {
-                                        panic!();
-                                    };
-                                    specific.state.set((ProcState::Stopped, Utc::now()));
-                                }
-                                return Ok(true);
-                            }
-                        };
+                        }
                     }.await {
                         Ok(done) => {
                             if done {
@@ -966,7 +1009,13 @@ fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, task: &TaskSt
                             warn!(err =? e, "Perpetual process failed with error");
                         },
                     }
-                    sleep(restart_delay).await;
+                    select!{
+                        _ = sleep(restart_delay) => {
+                        },
+                        _ =& mut stop_rx => {
+                            break;
+                        }
+                    }
                 }
             }.instrument(info_span!("task_perpetual", task_id = task.id)));
             return false;
@@ -986,23 +1035,27 @@ fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, task: &TaskSt
             let task_id = task.id.clone();
             let state = state.clone();
             spawn(async move {
-                let restart = spec.restart.unwrap_or_default();
+                let restart_delay = Duration::from(spec.restart_delay.unwrap_or(SimpleDuration {
+                    count: 1,
+                    unit: puterium_lib::duration::SimpleDurationUnit::Minute,
+                }).into());
                 let mut success_codes = HashSet::new();
-                success_codes.extend(restart.success_codes);
+                success_codes.extend(spec.success_codes);
                 if success_codes.is_empty() {
                     success_codes.insert(0);
                 }
                 loop {
                     match async {
                         ta_return!(bool, loga::Error);
-                        let (mut child, pid, logger) =
-                            spawn_proc(
-                                &state.env,
-                                &task_id,
-                                &spec.command,
-                                &spec.working_directory,
-                                &spec.environment,
-                            )?;
+                        let (mut child, pid, logger) = spawn_proc(&state.env, &task_id, &spec.command)?;
+                        {
+                            let state_dynamic = state.dynamic.lock().unwrap();
+                            let task = &state_dynamic.task_alloc[*state_dynamic.tasks.get(&task_id).unwrap()];
+                            let TaskStateSpecific::Finite(specific) = &task.specific else {
+                                panic!();
+                            };
+                            specific.pid.set(Some(pid.as_raw_nonzero().get()));
+                        }
 
                         // Wait for exit
                         select!{
@@ -1012,17 +1065,30 @@ fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, task: &TaskSt
                                         if r.code().filter(|c| success_codes.contains(c)).is_some() {
                                             // Mark as started + do state updates
                                             {
-                                                let state_dynamic = state.dynamic.lock().unwrap();
+                                                let mut state_dynamic = state.dynamic.lock().unwrap();
                                                 let task =
                                                     &state_dynamic.task_alloc[*state_dynamic
                                                         .tasks
                                                         .get(&task_id)
                                                         .unwrap()];
-                                                let TaskStateSpecific::Perpetual(specific) = &task.specific else {
+                                                let TaskStateSpecific::Finite(specific) = &task.specific else {
                                                     panic!();
                                                 };
-                                                specific.state.set((ProcState::Started, Utc::now()));
-                                                on_started(&state, &state_dynamic, &task_id);
+                                                specific.failed_start_count.set(0);
+                                                match specific.spec.started_action {
+                                                    interface::task::FiniteTaskEndAction::None => {
+                                                        specific.state.set((ProcState::Started, Utc::now()));
+                                                        on_started(&state, &state_dynamic, &task_id);
+                                                    },
+                                                    interface::task::FiniteTaskEndAction::TurnOff => {
+                                                        specific.state.set((ProcState::Stopped, Utc::now()));
+                                                        set_task_user_off(&state_dynamic, &task_id);
+                                                    },
+                                                    interface::task::FiniteTaskEndAction::Delete => {
+                                                        specific.state.set((ProcState::Stopped, Utc::now()));
+                                                        delete_task(&mut state_dynamic, &task_id);
+                                                    },
+                                                }
                                             }
                                             return Ok(true);
                                         } else {
@@ -1030,6 +1096,20 @@ fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, task: &TaskSt
                                             if let Err(e) =
                                                 logger.info(format!("Process ended with result: {:?}", r)) {
                                                 warn!(err =? e, "Error sending message to syslog");
+                                            }
+                                            {
+                                                let state_dynamic = state.dynamic.lock().unwrap();
+                                                let task =
+                                                    &state_dynamic.task_alloc[*state_dynamic
+                                                        .tasks
+                                                        .get(&task_id)
+                                                        .unwrap()];
+                                                let TaskStateSpecific::Finite(specific) = &task.specific else {
+                                                    panic!();
+                                                };
+                                                specific
+                                                    .failed_start_count
+                                                    .set(specific.failed_start_count.get() + 1);
                                             }
 
                                             // Keep as `starting`
@@ -1053,7 +1133,7 @@ fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, task: &TaskSt
                                 {
                                     let state_dynamic = state.dynamic.lock().unwrap();
                                     let task = &state_dynamic.task_alloc[*state_dynamic.tasks.get(&task_id).unwrap()];
-                                    let TaskStateSpecific::Perpetual(specific) = &task.specific else {
+                                    let TaskStateSpecific::Finite(specific) = &task.specific else {
                                         panic!();
                                     };
                                     specific.state.set((ProcState::Stopping, Utc::now()));
@@ -1061,16 +1141,17 @@ fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, task: &TaskSt
                                 }
 
                                 // Signal stop
-                                gentle_stop_proc(pid, child, logger).await?;
+                                gentle_stop_proc(pid, child, logger, spec.stop_timeout).await?;
 
                                 // Mark as stopped
                                 {
                                     let state_dynamic = state.dynamic.lock().unwrap();
                                     let task = &state_dynamic.task_alloc[*state_dynamic.tasks.get(&task_id).unwrap()];
-                                    let TaskStateSpecific::Perpetual(specific) = &task.specific else {
+                                    let TaskStateSpecific::Finite(specific) = &task.specific else {
                                         panic!();
                                     };
                                     specific.state.set((ProcState::Stopped, Utc::now()));
+                                    specific.pid.set(None);
                                 }
                                 return Ok(true);
                             }
@@ -1085,10 +1166,13 @@ fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, task: &TaskSt
                             warn!(err =? e, "Perpetual process failed with error");
                         },
                     }
-                    sleep(restart.delay.unwrap_or(SimpleDuration {
-                        count: 1,
-                        unit: puterium_lib::duration::SimpleDurationUnit::Minute,
-                    }).into()).await;
+                    select!{
+                        _ = sleep(restart_delay) => {
+                        },
+                        _ =& mut stop_rx => {
+                            break;
+                        }
+                    }
                 }
             }.instrument(info_span!("task_finite", task_id = task.id)));
             return false;
@@ -1102,7 +1186,7 @@ fn set_task_user_on(state: &Arc<State>, state_dynamic: &StateDynamic, task_id: &
     {
         let task = &state_dynamic.task_alloc[*state_dynamic.tasks.get(task_id).unwrap()];
         let was_on = task_on(&task);
-        task.direct_on.set((true, Utc::now()));
+        task.user_on.set((true, Utc::now()));
         if was_on {
             return;
         }
@@ -1123,9 +1207,12 @@ fn set_task_user_on(state: &Arc<State>, state_dynamic: &StateDynamic, task_id: &
             }
             frontier.push((false, task_id));
             upstream(&task, |dependencies| {
-                for (dep_id, dep_info) in dependencies {
-                    if !dep_info.set_transitive_on {
-                        continue;
+                for (dep_id, dep_type) in dependencies {
+                    match dep_type {
+                        DependencyType::Strong => { },
+                        DependencyType::Weak => {
+                            continue;
+                        },
                     }
                     frontier.push((true, dep_id.clone()));
                 }
@@ -1172,7 +1259,7 @@ fn set_task_user_off(state_dynamic: &StateDynamic, task_id: &TaskId) {
     {
         let task = &state_dynamic.task_alloc[*state_dynamic.tasks.get(task_id).unwrap()];
         let was_off = !task_on(&task);
-        task.direct_on.set((false, Utc::now()));
+        task.user_on.set((false, Utc::now()));
         if was_off || task.transitive_on.get().0 {
             return;
         }
@@ -1213,13 +1300,16 @@ fn set_task_user_off(state_dynamic: &StateDynamic, task_id: &TaskId) {
         if all_downstream_tasks_stopped(state_dynamic, &task) {
             do_stop_task(&task);
         }
-        if task.direct_on.get().0 {
+        if task.user_on.get().0 {
             continue;
         }
         upstream(&task, |upstream| {
-            for (up_id, up_dep_info) in upstream {
-                if !up_dep_info.set_transitive_on {
-                    continue;
+            for (up_id, up_dep_type) in upstream {
+                match up_dep_type {
+                    DependencyType::Strong => { },
+                    DependencyType::Weak => {
+                        continue;
+                    },
                 }
                 frontier.push(up_id.clone());
             }

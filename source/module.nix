@@ -1,7 +1,7 @@
 { config, pkgs, lib, ... }:
 {
   options = {
-    puterium =
+    puteron =
       let
         submoduleEnum = spec: types.addCheck (types.submodule spec) (v: builtins.length (lib.attrsToList v));
         upstreamArg = mkOption {
@@ -51,11 +51,11 @@
         enable = mkOption {
           type = types.bool;
           default = false;
-          description = "Enable the puterium service for managing puterium services (tasks)";
+          description = "Enable the puteron service for managing puteron services (tasks)";
         };
         environment = envArg;
         tasks = mkOption {
-          description = "See puterium documentation for field details";
+          description = "See puteron documentation for field details";
           type = types.attrsOf submoduleEnum {
             empty = mkOption {
               default = null;
@@ -129,28 +129,28 @@
             let
               pkg = import ./package.nix;
               taskDirs = derivation {
-                name = "puterium-task-configs";
+                name = "puteron-task-configs";
                 builder = "${pkgs.python3}/bin/python3";
                 args = [
                   ./module_gendir.py
                   (builtins.toJSON (builtins.listToAttrs (builtins.concatMap (lib.attrsToList [
-                    config.puterium.empty
-                    config.puterium.perpetual
-                    config.puterium.finite
-                    config.puterium.external
+                    config.puteron.empty
+                    config.puteron.perpetual
+                    config.puteron.finite
+                    config.puteron.external
                   ]))))
                 ];
               };
             in
             lib.concatStringsSep " " [
-              "${pkg}/bin/puterium"
+              "${pkg}/bin/puteron"
               "demon"
               "run"
-              (pkgs.writeText "puterium-config" (builtins.toJSON (builtins.listToAttrs (
+              (pkgs.writeText "puteron-config" (builtins.toJSON (builtins.listToAttrs (
                 [ ]
-                ++ (lib.option config.puterium.environment {
+                ++ (lib.option config.puteron.environment {
                   name = "environment";
-                  value = config.puterium.environment;
+                  value = config.puteron.environment;
                 })
                 ++ [{
                   name = "task_dirs";

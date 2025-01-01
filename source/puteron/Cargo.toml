@@ -1,5 +1,5 @@
 [package]
-name = "puterium"
+name = "puteron"
 version = "0.1.0"
 edition = "2021"
 publish = false
@@ -19,7 +19,7 @@ tokio = { version = "1", features = [
     "net",
     "io-util",
 ] }
-puterium-lib = { path = "../puterium-lib" }
+puteron-lib = { path = "../puteron-lib" }
 syslog = "7"
 rustix = { version = "0.38", features = ["process"] }
 async-pipe = "0.1"

@@ -802,7 +802,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "puterium"
+name = "puteron"
 version = "0.1.0"
 dependencies = [
  "aargvark",
@@ -810,7 +810,7 @@ dependencies = [
  "chrono",
  "flowcontrol",
  "loga",
- "puterium-lib",
+ "puteron-lib",
  "rustix 0.38.42",
  "serde",
  "serde_json",
@@ -824,7 +824,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "puterium-lib"
+name = "puteron-lib"
 version = "0.1.0"
 dependencies = [
  "chrono",

@@ -25,7 +25,7 @@ pub(crate) fn ipc_path() -> Option<PathBuf> {
     if let Ok(p) = env::var("PUTERIUM_IPC_SOCK") {
         return Some(PathBuf::from(p));
     }
-    return Some(PathBuf::from("/run/puterium.sock"));
+    return Some(PathBuf::from("/run/puteron.sock"));
 }
 
 pub(crate) async fn write(conn: &mut UnixStream, message: &[u8]) -> Result<(), loga::Error> {
@@ -56,7 +56,7 @@ pub(crate) async fn read<O: DeserializeOwned>(conn: &mut UnixStream) -> Result<O
 }
 
 pub(crate) async fn client_req<
-    I: puterium_lib::interface::message::v1::RequestTrait,
+    I: puteron_lib::interface::message::v1::RequestTrait,
 >(req: I) -> Result<I::Response, loga::Error> {
     let mut conn =
         UnixSocket::new_stream()?

@@ -153,7 +153,7 @@ pub enum Task {
     /// Finite tasks are considered started once they successfully exit.
     Finite(TaskSpecFinite),
     /// An external task is a task where the state is determined by an external process
-    /// that communicates with puterium via API to communicate state changes.  Since it
+    /// that communicates with puteron via API to communicate state changes.  Since it
     /// is externally managed, it can have no dependencies.
     ///
     /// When the task is set `user_on`, it is immediately also considered `started`

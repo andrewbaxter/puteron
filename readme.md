@@ -1,6 +1,6 @@
-# What is Puterium
+# What is Puteron
 
-Puterium is a process manager, like SystemD or Runit or Shepherd or any number of others.
+Puteron is a process manager, like SystemD or Runit or Shepherd or any number of others.
 
 Here's a quick comparison to SystemD:
 
@@ -16,11 +16,11 @@ Here's a quick comparison to SystemD:
 
 1. Define tasks (services, processes, jobs) with JSON - see the task JSON specification below
 
-2. Define Puterium config: see the config JSON specification below
+2. Define Puteron config: see the config JSON specification below
 
 3. Put the task JSON in the task directories where they'll be merged (by name) and loaded at startup
 
-4. Run puterium with `puterium demon run config.json`
+4. Run Puteron with `puteron demon run config.json`
 
 # Graph logic
 
@@ -36,9 +36,9 @@ Tasks are either on or off (control state), and started or stopped (actual state
 
 These are logically-unioned to produce a single `on` value. To put it another way, a task is `on` if 1. the user says they need it on or 2. if any other task the user says they need on (transitively) needs it.
 
-If a task is `on` puterium will try to make sure it's running (start it, restart it if it failed, etc). If a task is `off` puterium will try to make sure it's not running (stop it, force kill it if that fails).
+If a task is `on` Puteron will try to make sure it's running (start it, restart it if it failed, etc). If a task is `off` Puteron will try to make sure it's not running (stop it, force kill it if that fails).
 
-You can see tasks which affect the `transitive_on` value of a task with `puterium task list-downstream`.
+You can see tasks which affect the `transitive_on` value of a task with `puteron task list-downstream`.
 
 ### Actual state
 
@@ -64,7 +64,7 @@ Non-existant and deleted tasks are considered `off` and `stopped` for dependency
 
 ## Starting and stopping tasks
 
-When a task becomes `on`, any `strong` upstream dependencies of the task will be started (per `transitive_on` behavior). The task itself won't be started until every dependency has started. You can see which tasks affect startup using `puterium task list-upstream`.
+When a task becomes `on`, any `strong` upstream dependencies of the task will be started (per `transitive_on` behavior). The task itself won't be started until every dependency has started. You can see which tasks affect startup using `puteron task list-upstream`.
 
 When a task becomes `off`, once any dependents have stopped, the task will be stopped (if a processes, signalled), and once the process finishes for this task it will repeat for any dependencies that have also become `off`.
 
@@ -86,7 +86,7 @@ Nix definitions are provided in
 
 - `source/package.nix` - just the derivation to build the binary
 
-- `source/module.nix` - Nice, type-checked configs via `config.puterium = { ... }`. Sets `puterium` up as a SystemD unit.
+- `source/module.nix` - Nice, type-checked configs via `config.puteron = { ... }`. Sets `puteron` up as a SystemD unit.
 
   It closely follows the JSON schema, so refer to that for config details.
 
@@ -94,9 +94,9 @@ You can use it by doing
 
 ```nix
 {
-  modules = [ ./path/to/puterium/source/module.nix ];
+  modules = [ ./path/to/puteron/source/module.nix ];
   config = {
-    puterium = {
+    puteron = {
       ...
     };
   };
@@ -165,4 +165,4 @@ To even have a chance of getting users, I needed to figure out what the core fea
 
   The dependency graph prevents services from starting when critical dependencies aren't on, avoiding a lot of error spam in the noise.
 
-I think Puterium has solutions for most of these, to some degree. Per the goal of having a limited scope, some of these may require additional scripting around processes. You can't do direct conversion of SystemD units to Puterium tasks, but I think most services could be run in Puterium without much hassle.
+I think Puteron has solutions for most of these, to some degree. Per the goal of having a limited scope, some of these may require additional scripting around processes. You can't do direct conversion of SystemD units to Puteron tasks, but I think most services could be run in Puteron without much hassle.

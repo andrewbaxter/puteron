@@ -7,19 +7,19 @@
    , makeWrapper
    }:
   rustPlatform.buildRustPackage rec {
-    pname = "puterium";
+    pname = "puteron";
     version = "0.0.0";
     cargoLock = {
-      lockFile = ./puterium/Cargo.lock;
+      lockFile = ./puteron/Cargo.lock;
     };
     src = ../source;
-    sourceRoot = "source/puterium";
+    sourceRoot = "source/puteron";
     preConfigure = ''
       cd ../../
       mv source ro
       cp -r ro rw
       chmod -R u+w rw
-      cd rw/puterium
+      cd rw/puteron
     '';
     nativeBuildInputs = [
       pkg-config

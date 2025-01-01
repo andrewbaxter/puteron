@@ -4,7 +4,7 @@ use {
         ErrContext,
         ResultContext,
     },
-    puterium_lib::interface,
+    puteron_lib::interface,
     std::{
         collections::HashMap,
         fs::read_dir,

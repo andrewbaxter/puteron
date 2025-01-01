@@ -28,7 +28,7 @@ use {
         DebugDisplay,
         ResultContext,
     },
-    puterium_lib::{
+    puteron_lib::{
         duration::SimpleDuration,
         interface::{
             self,
@@ -894,7 +894,7 @@ fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, task: &TaskSt
             spawn(async move {
                 let restart_delay = Duration::from(spec.restart_delay.unwrap_or(SimpleDuration {
                     count: 1,
-                    unit: puterium_lib::duration::SimpleDurationUnit::Minute,
+                    unit: puteron_lib::duration::SimpleDurationUnit::Minute,
                 }).into());
                 loop {
                     match async {
@@ -1037,7 +1037,7 @@ fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, task: &TaskSt
             spawn(async move {
                 let restart_delay = Duration::from(spec.restart_delay.unwrap_or(SimpleDuration {
                     count: 1,
-                    unit: puterium_lib::duration::SimpleDurationUnit::Minute,
+                    unit: puteron_lib::duration::SimpleDurationUnit::Minute,
                 }).into());
                 let mut success_codes = HashSet::new();
                 success_codes.extend(spec.success_codes);

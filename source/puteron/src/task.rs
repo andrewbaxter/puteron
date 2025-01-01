@@ -14,7 +14,7 @@ use {
         ea,
         ResultContext,
     },
-    puterium_lib::interface::{
+    puteron_lib::interface::{
         self,
         base::TaskId,
         message::{
@@ -48,6 +48,7 @@ pub(crate) struct AddArgs {
 }
 
 #[derive(Aargvark)]
+#[vark(break_help)]
 pub(crate) enum TaskCommands {
     /// Load or replace a task from a single config specified via arguments.
     Add(AddArgs),

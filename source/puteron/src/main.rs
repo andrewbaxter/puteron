@@ -11,6 +11,7 @@ pub mod ipc;
 pub mod spec;
 
 #[derive(Aargvark)]
+#[vark(break_help)]
 enum ArgCommand {
     Task(TaskCommands),
     Demon(DemonCommands),

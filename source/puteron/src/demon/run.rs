@@ -76,6 +76,7 @@ use {
     },
     syslog::Formatter3164,
     tokio::{
+        fs::remove_file,
         io::{
             AsyncBufReadExt,
             BufReader,
@@ -108,14 +109,13 @@ use {
         debug,
         info_span,
         instrument,
-        trace,
         warn,
         Instrument,
     },
 };
 
 #[derive(Serialize, Deserialize, Clone)]
-#[serde(rename = "snake_case", deny_unknown_fields)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 struct Config {
     #[serde(default)]
     environment: interface::task::Environment,
@@ -145,7 +145,7 @@ pub(crate) fn main(args: DemonRunArgs) -> Result<(), loga::Error> {
                         env.insert(k, v);
                     },
                     Err(e) => {
-                        warn!(key = k, err =? e, "Failed to read env var, treating as unset");
+                        warn!(key = k, err = e.to_string(), "Failed to read env var, treating as unset");
                         continue;
                     },
                 }
@@ -204,6 +204,8 @@ pub(crate) fn main(args: DemonRunArgs) -> Result<(), loga::Error> {
     let rt = runtime::Builder::new_multi_thread().enable_all().build().context("Error starting async runtime")?;
     rt.block_on(async move {
         ta_return!((), loga::Error);
+
+        // ## Start default-on tasks
         {
             let state_dynamic = state.dynamic.lock().unwrap();
             for (id, task) in &state_dynamic.tasks {
@@ -211,29 +213,43 @@ pub(crate) fn main(args: DemonRunArgs) -> Result<(), loga::Error> {
                 let user_on;
                 match &task.specific {
                     TaskStateSpecific::Empty(s) => {
-                        user_on = !s.spec.default_off;
+                        user_on = s.spec.default_on;
                     },
                     TaskStateSpecific::Perpetual(s) => {
-                        user_on = !s.spec.default_off;
+                        user_on = s.spec.default_on;
                     },
                     TaskStateSpecific::Finite(s) => {
-                        user_on = !s.spec.default_off;
+                        user_on = s.spec.default_on;
                     },
                     TaskStateSpecific::External => {
                         user_on = false;
                     },
                 }
+                debug!(task = task.id, on = user_on, "Task initial state");
                 if !user_on {
                     continue;
                 }
                 set_task_user_on(&state, &state_dynamic, id);
             }
         }
+
+        // ## Handle ipc + other inputs (signals)
         let mut sigint = tokio::signal::unix::signal(SignalKind::interrupt()).context("Error hooking into SIGINT")?;
         let mut sigterm =
             tokio::signal::unix::signal(SignalKind::terminate()).context("Error hooking into SIGTERM")?;
         let state = state.clone();
         if let Some(ipc_path) = ipc::ipc_path() {
+            match remove_file(&ipc_path).await {
+                Ok(_) => { },
+                Err(e) => match e.kind() {
+                    std::io::ErrorKind::NotFound => { },
+                    _ => {
+                        return Err(
+                            e,
+                        ).context_with("Error cleaning up old ipc socket", ea!(path = ipc_path.dbg_str()));
+                    },
+                },
+            }
             let message_socket = UnixListener::bind(ipc_path).context("Error creating control socket")?;
             let mut sigint = Box::pin(sigint.recv());
             let mut sigterm = Box::pin(sigterm.recv());
@@ -258,14 +274,11 @@ pub(crate) fn main(args: DemonRunArgs) -> Result<(), loga::Error> {
                         let (stream, peer) = match accepted {
                             Ok((stream, peer)) => (stream, peer),
                             Err(e) => {
-                                debug!(err =? e, "Error accepting connection");
+                                debug!(err = e.to_string(), "Error accepting connection");
                                 continue;
                             },
                         };
-                        let Some(peer) = peer.as_pathname() else {
-                            continue;
-                        };
-                        spawn(handle_ipc(state.clone(), peer.to_path_buf(), stream));
+                        spawn(handle_ipc(state.clone(), peer, stream));
                     }
                 }
             }
@@ -285,7 +298,9 @@ pub(crate) fn main(args: DemonRunArgs) -> Result<(), loga::Error> {
         }
         return Ok(());
     })?;
-    rt.shutdown_timeout(Duration::MAX);
+
+    // Waits for all tasks
+    drop(rt);
     return Ok(());
 }
 
@@ -418,7 +433,7 @@ fn load_task(state_dynamic: &mut StateDynamic, task_id: TaskId, spec: Task) -> R
 }
 
 #[instrument(skip_all, fields(peer =? peer))]
-async fn handle_ipc(state: Arc<State>, peer: PathBuf, mut conn: UnixStream) {
+async fn handle_ipc(state: Arc<State>, peer: tokio::net::unix::SocketAddr, mut conn: UnixStream) {
     loop {
         let message = match ipc::read::<interface::message::Request>(&mut conn).await {
             Ok(Some(message)) => message,
@@ -426,7 +441,7 @@ async fn handle_ipc(state: Arc<State>, peer: PathBuf, mut conn: UnixStream) {
                 return;
             },
             Err(e) => {
-                trace!(peer =? peer, error =? e, "Error reading message from connection");
+                debug!(peer =? peer, error =? e, "Error reading message from connection");
                 return;
             },
         };
@@ -625,32 +640,34 @@ async fn handle_ipc(state: Arc<State>, peer: PathBuf, mut conn: UnixStream) {
                             let mut frontier = vec![(true, m.0.clone(), DependencyType::Strong)];
                             while let Some((first, task_id, dependency_type)) = frontier.pop() {
                                 if first {
-                                    let Some(task) = state_dynamic.tasks.get(&m.0) else {
-                                        return Err(format!("Unknown task [{}]", m.0));
-                                    };
-                                    let task = &state_dynamic.task_alloc[*task];
-                                    out_stack.push(TaskUpstreamStatus {
-                                        task: task_id.clone(),
-                                        on: task_on(task),
-                                        started: task_started(task),
-                                        dependency_type: dependency_type,
-                                        related: HashMap::new(),
-                                    });
-                                    frontier.push((false, task_id, dependency_type));
-                                    upstream(task, |upstream| {
-                                        for (next_id, next_dep_type) in upstream {
-                                            frontier.push((true, next_id.clone(), match dependency_type {
-                                                DependencyType::Strong => *next_dep_type,
-                                                DependencyType::Weak => DependencyType::Weak,
-                                            }));
-                                        }
-                                    });
+                                    frontier.push((false, task_id.clone(), dependency_type));
+                                    if let Some(task) = state_dynamic.tasks.get(&task_id) {
+                                        let task = &state_dynamic.task_alloc[*task];
+                                        out_stack.push(Some(TaskUpstreamStatus {
+                                            task: task_id,
+                                            on: task_on(task),
+                                            started: task_started(task),
+                                            dependency_type: dependency_type,
+                                            related: HashMap::new(),
+                                        }));
+                                        upstream(task, |upstream| {
+                                            for (next_id, next_dep_type) in upstream {
+                                                frontier.push((true, next_id.clone(), match dependency_type {
+                                                    DependencyType::Strong => *next_dep_type,
+                                                    DependencyType::Weak => DependencyType::Weak,
+                                                }));
+                                            }
+                                        });
+                                    } else {
+                                        out_stack.push(None);
+                                    }
                                 } else {
                                     let top = out_stack.pop().unwrap();
                                     if let Some(parent) = out_stack.last_mut() {
+                                        let parent = parent.as_mut().unwrap();
                                         parent.related.insert(task_id, top);
                                     } else {
-                                        root = Some(top.related);
+                                        root = top.map(|x| x.related);
                                     }
                                 }
                             }
@@ -666,26 +683,30 @@ async fn handle_ipc(state: Arc<State>, peer: PathBuf, mut conn: UnixStream) {
                             let mut frontier = vec![(true, m.0.clone())];
                             while let Some((first, task_id)) = frontier.pop() {
                                 if first {
-                                    let Some(task) = state_dynamic.tasks.get(&m.0) else {
-                                        return Err(format!("Unknown task [{}]", m.0));
-                                    };
-                                    let task = &state_dynamic.task_alloc[*task];
-                                    out_stack.push(TaskDownstreamStatus {
-                                        task: task_id.clone(),
-                                        on: task_on(task),
-                                        started: task_started(task),
-                                        related: HashMap::new(),
-                                    });
-                                    frontier.push((false, task_id));
-                                    for (dep_id, _) in task.downstream.borrow().iter() {
-                                        frontier.push((true, dep_id.clone()));
+                                    frontier.push((false, task_id.clone()));
+                                    let push_status;
+                                    if let Some(task) = state_dynamic.tasks.get(&task_id) {
+                                        let task = &state_dynamic.task_alloc[*task];
+                                        push_status = Some(TaskDownstreamStatus {
+                                            task: task_id,
+                                            on: task_on(task),
+                                            started: task_started(task),
+                                            related: HashMap::new(),
+                                        });
+                                        for (dep_id, _) in task.downstream.borrow().iter() {
+                                            frontier.push((true, dep_id.clone()));
+                                        }
+                                    } else {
+                                        push_status = None;
                                     }
+                                    out_stack.push(push_status);
                                 } else {
                                     let top = out_stack.pop().unwrap();
                                     if let Some(parent) = out_stack.last_mut() {
+                                        let parent = parent.as_mut().unwrap();
                                         parent.related.insert(task_id, top);
                                     } else {
-                                        root = Some(top.related);
+                                        root = top.map(|x| x.related);
                                     }
                                 }
                             }
@@ -705,12 +726,12 @@ async fn handle_ipc(state: Arc<State>, peer: PathBuf, mut conn: UnixStream) {
                 match ipc::write(&mut conn, &body).await {
                     Ok(_) => { },
                     Err(e) => {
-                        trace!(err =? e, "Error writing response");
+                        debug!(err = e.to_string(), "Error writing response");
                     },
                 }
             },
             Err(e) => {
-                trace!(err =? e, "Error handling message");
+                debug!(err = e.to_string(), "Error handling message");
             },
         }
     }
@@ -779,6 +800,7 @@ fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, task: &TaskSt
         for (k, v) in &spec.environment.add {
             command.env(k, v);
         }
+        debug!(command =? command, "Spawning task process");
 
         // Stdout/err -> syslog 1
         command.stderr(Stdio::piped());
@@ -812,7 +834,7 @@ fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, task: &TaskSt
                         Ok(_) => (),
                         // Syslog restarting? or something
                         Err(e) => {
-                            warn!(err =? e, "Error forwarding child output line");
+                            warn!(err = e.to_string(), "Error forwarding child output line");
                         },
                     };
                 }
@@ -829,22 +851,22 @@ fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, task: &TaskSt
         stop_timeout: Option<SimpleDuration>,
     ) -> Result<(), loga::Error> {
         if let Err(e) = rustix::process::kill_process(pid, Signal::Term) {
-            warn!(err =? e, "Error sending TERM to child");
+            warn!(err = e.to_string(), "Error sending TERM to child");
         }
         select!{
             r = child.wait() => {
                 let mut logger = logger.await?;
                 if let Err(e) = logger.info(format!("Process ended with status: {:?}", r)) {
-                    warn!(err =? e, "Error sending message to syslog");
+                    warn!(err = e.to_string(), "Error sending message to syslog");
                 }
             },
             _ = sleep(stop_timeout.map(|x| x.into()).unwrap_or(Duration::from_secs(30))) => {
                 if let Err(e) = rustix::process::kill_process(pid, Signal::Kill) {
-                    warn!(err =? e, "Error sending KILL to child");
+                    warn!(err = e.to_string(), "Error sending KILL to child");
                 }
                 let mut logger = logger.await?;
                 if let Err(e) = logger.info(format!("Sent KILL: timeout after TERM")) {
-                    warn!(err =? e, "Error sending message to syslog");
+                    warn!(err = e.to_string(), "Error sending message to syslog");
                 }
             }
         }
@@ -874,6 +896,7 @@ fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, task: &TaskSt
 
     match &task.specific {
         TaskStateSpecific::Empty(s) => {
+            debug!(task = task.id, "Starting task");
             s.started.set((true, Utc::now()));
             return true;
         },
@@ -897,6 +920,7 @@ fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, task: &TaskSt
                     unit: puteron_lib::duration::SimpleDurationUnit::Minute,
                 }).into());
                 loop {
+                    debug!(task = task_id, "Starting task");
                     match async {
                         ta_return!(bool, loga::Error);
                         let (mut child, pid, logger) = spawn_proc(&state.env, &task_id, &spec.command)?;
@@ -933,6 +957,7 @@ fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, task: &TaskSt
                                     },
                                 },
                             }
+                            debug!(task = task_id, "Confirmed task started");
                             {
                                 let state_dynamic = state.dynamic.lock().unwrap();
                                 let task = &state_dynamic.task_alloc[*state_dynamic.tasks.get(&task_id).unwrap()];
@@ -954,6 +979,8 @@ fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, task: &TaskSt
                                 unreachable!();
                             },
                             _ =& mut stop_rx => {
+                                debug!(task = task_id, "Got stop signal, stopping");
+
                                 // Mark as stopping + do state updates
                                 {
                                     let state_dynamic = state.dynamic.lock().unwrap();
@@ -981,9 +1008,10 @@ fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, task: &TaskSt
                                 return Ok(true);
                             },
                             r = child.wait() => {
+                                debug!(task = task_id, "Perpetual task exited, will restart after delay");
                                 let mut logger = logger.await?;
                                 if let Err(e) = logger.info(format!("Process ended with status: {:?}", r)) {
-                                    warn!(err =? e, "Error sending message to syslog");
+                                    warn!(err = e.to_string(), "Error sending message to syslog");
                                 }
 
                                 // Mark as starting + do state updates
@@ -1006,7 +1034,7 @@ fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, task: &TaskSt
                             }
                         },
                         Err(e) => {
-                            warn!(err =? e, "Perpetual process failed with error");
+                            warn!(err = e.to_string(), "Perpetual process failed with error");
                         },
                     }
                     select!{
@@ -1060,6 +1088,7 @@ fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, task: &TaskSt
                         // Wait for exit
                         select!{
                             r = child.wait() => {
+                                debug!(task = task_id, "Finite task exited, finished starting");
                                 match r {
                                     Ok(r) => {
                                         if r.code().filter(|c| success_codes.contains(c)).is_some() {
@@ -1095,7 +1124,7 @@ fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, task: &TaskSt
                                             let mut logger = logger.await?;
                                             if let Err(e) =
                                                 logger.info(format!("Process ended with result: {:?}", r)) {
-                                                warn!(err =? e, "Error sending message to syslog");
+                                                warn!(err = e.to_string(), "Error sending message to syslog");
                                             }
                                             {
                                                 let state_dynamic = state.dynamic.lock().unwrap();
@@ -1120,7 +1149,7 @@ fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, task: &TaskSt
                                         let mut logger = logger.await?;
                                         if let Err(e) =
                                             logger.info(format!("Process ended with unknown result: {:?}", e)) {
-                                            warn!(err =? e, "Error sending message to syslog");
+                                            warn!(err = e.to_string(), "Error sending message to syslog");
                                         };
 
                                         // Keep as `starting`
@@ -1129,6 +1158,8 @@ fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, task: &TaskSt
                                 }
                             }
                             _ =& mut stop_rx => {
+                                debug!(task = task_id, "Got stop signal, stopping");
+
                                 // Mark as stopping + do state updates
                                 {
                                     let state_dynamic = state.dynamic.lock().unwrap();
@@ -1163,7 +1194,7 @@ fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, task: &TaskSt
                             }
                         },
                         Err(e) => {
-                            warn!(err =? e, "Perpetual process failed with error");
+                            warn!(err = e.to_string(), "Perpetual process failed with error");
                         },
                     }
                     select!{
@@ -1182,20 +1213,9 @@ fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, task: &TaskSt
 }
 
 fn set_task_user_on(state: &Arc<State>, state_dynamic: &StateDynamic, task_id: &TaskId) {
-    // Update on flags and check if the effective `on` state has changed
-    {
-        let task = &state_dynamic.task_alloc[*state_dynamic.tasks.get(task_id).unwrap()];
-        let was_on = task_on(&task);
-        task.user_on.set((true, Utc::now()));
-        if was_on {
-            return;
-        }
-    }
-
-    // Set transitive_on for strong deps, start leaves
     let mut frontier = vec![(true, task_id.clone())];
-    while let Some((down, task_id)) = frontier.pop() {
-        if down {
+    while let Some((first, task_id)) = frontier.pop() {
+        if first {
             let Some(task) = state_dynamic.tasks.get(&task_id) else {
                 continue;
             };
@@ -1231,6 +1251,7 @@ fn set_task_user_on(state: &Arc<State>, state_dynamic: &StateDynamic, task_id: &
 
 /// Return true if task is finished stopping (can continue with upstream).
 fn do_stop_task(task: &TaskState_) -> bool {
+    debug!(task = task.id, "Stopping task");
     match &task.specific {
         TaskStateSpecific::Empty(s) => {
             s.started.set((false, Utc::now()));

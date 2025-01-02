@@ -3,6 +3,10 @@ use {
         ErrContext,
         ResultContext,
     },
+    puteron_lib::interface::message::{
+        latest,
+        Request,
+    },
     serde::de::DeserializeOwned,
     std::{
         env,
@@ -25,6 +29,9 @@ pub(crate) fn ipc_path() -> Option<PathBuf> {
     if let Ok(p) = env::var("PUTERIUM_IPC_SOCK") {
         return Some(PathBuf::from(p));
     }
+    if let Ok(p) = env::var("XDG_RUNTIME_DIR") {
+        return Some(PathBuf::from(p).join("puteron.sock"));
+    }
     return Some(PathBuf::from("/run/puteron.sock"));
 }
 
@@ -38,8 +45,11 @@ pub(crate) async fn read<O: DeserializeOwned>(conn: &mut UnixStream) -> Result<O
     let len = match conn.read_u64_le().await {
         Ok(len) => len,
         Err(e) => {
-            if e.kind() == ErrorKind::BrokenPipe {
-                return Ok(None);
+            match e.kind() {
+                ErrorKind::BrokenPipe | ErrorKind::ConnectionReset | ErrorKind::UnexpectedEof => {
+                    return Ok(None);
+                },
+                _ => { },
             }
             return Err(e.context("Error reading message length from connection"));
         },
@@ -55,13 +65,11 @@ pub(crate) async fn read<O: DeserializeOwned>(conn: &mut UnixStream) -> Result<O
     return Ok(Some(serde_json::from_slice::<O>(&body).context("Error parsing message JSON")?));
 }
 
-pub(crate) async fn client_req<
-    I: puteron_lib::interface::message::v1::RequestTrait,
->(req: I) -> Result<I::Response, loga::Error> {
+pub(crate) async fn client_req<I: latest::RequestTrait>(req: I) -> Result<I::Response, loga::Error> {
     let mut conn =
         UnixSocket::new_stream()?
             .connect(ipc_path().context("No IPC path set; there is no default IPC path for non-root users")?)
             .await?;
-    write(&mut conn, &serde_json::to_vec(&req).unwrap()).await?;
+    write(&mut conn, &serde_json::to_vec(&Request::V1(latest::Request::from(req.into()))).unwrap()).await?;
     return Ok(read::<I::Response>(&mut conn).await?.context("Disconnected by remote host")?);
 }

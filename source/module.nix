@@ -10,7 +10,7 @@
           default = null;
           type = lib.types.nullOr (lib.types.attrsOf (lib.types.enum [ "strong" "weak" ]));
         };
-        defaultOffArg = lib.mkOption {
+        defaultOnArg = lib.mkOption {
           default = null;
           type = lib.types.nullOr lib.types.bool;
         };
@@ -56,6 +56,11 @@
           default = false;
           description = "Enable the puteron service for managing puteron services (tasks)";
         };
+        debug = lib.mkOption {
+          type = lib.types.bool;
+          default = false;
+          description = "Enable debug logging";
+        };
         environment = envArg;
         tasks = lib.mkOption {
           description = "See puteron documentation for field details";
@@ -65,7 +70,7 @@
               type = lib.types.nullOr (lib.types.submodule {
                 options = {
                   upstream = upstreamArg;
-                  default_off = defaultOffArg;
+                  default_on = defaultOnArg;
                 };
               });
             };
@@ -74,7 +79,7 @@
               type = lib.types.nullOr (lib.types.submodule {
                 options = {
                   upstream = upstreamArg;
-                  default_off = defaultOffArg;
+                  default_on = defaultOnArg;
                   command = commandArg;
                   started_check = lib.mkOption {
                     default = null;
@@ -99,7 +104,7 @@
               type = lib.types.nullOr (lib.types.submodule {
                 options = {
                   upstream = upstreamArg;
-                  default_off = defaultOffArg;
+                  default_on = defaultOnArg;
                   command = commandArg;
                   success_codes = lib.mkOption {
                     default = null;
@@ -122,26 +127,32 @@
         };
       };
   };
-  config =
-    let
-      cfg = config.volumesetup;
-    in
-    {
-      system.build.puteron_script = pkgs.writeShellScript "puteron-run" (
-        let
-          pkg = import ./package.nix { pkgs = pkgs; };
-          taskDirs = derivation {
-            name = "puteron-task-configs";
-            system = builtins.currentSystem;
-            builder = "${pkgs.python3}/bin/python3";
-            args = [
-              ./module_gendir.py
-              (builtins.toJSON config.puteron.tasks)
-            ];
-          };
-        in
-        lib.concatStringsSep " " [
-          "${pkg}/bin/puteron"
+  config = {
+    system.build.puteron_pkg = import ./package.nix {
+      pkgs = pkgs;
+      debug = config.puteron.debug;
+    };
+    system.build.puteron_script = pkgs.writeShellScript "puteron-run" (
+      let
+        tasks = builtins.listToAttrs (map
+          (t: {
+            name = t.name;
+            value = lib.attrsets.filterAttrsRecursive (k: v: v != null) t.value;
+          })
+          (lib.attrsToList config.puteron.tasks));
+        taskDirs = derivation {
+          name = "puteron-task-configs";
+          system = builtins.currentSystem;
+          builder = "${pkgs.python3}/bin/python3";
+          args = [
+            ./module_gendir.py
+            (builtins.toJSON tasks)
+          ];
+        };
+      in
+      lib.concatStringsSep " " (
+        [
+          "${config.system.build.puteron_pkg}/bin/puteron"
           "demon"
           "run"
           (pkgs.writeText "puteron-config" (builtins.toJSON (builtins.listToAttrs (
@@ -152,20 +163,22 @@
             })
             ++ [{
               name = "task_dirs";
-              value = taskDirs;
+              value = [ taskDirs ];
             }]
           ))))
         ]
-      );
-      systemd.services = lib.mkIf cfg.enable {
-        volumesetup = {
-          wantedBy = [ "multi-user.target" ];
-          serviceConfig.Type = "simple";
-          startLimitIntervalSec = 0;
-          serviceConfig.Restart = "on-failure";
-          serviceConfig.RestartSec = 60;
-          script = cfg.system.build.puteron_script;
-        };
+        ++ (lib.lists.optional config.puteron.debug "--debug")
+      )
+    );
+    systemd.services = lib.mkIf config.puteron.enable {
+      puteron = {
+        wantedBy = [ "multi-user.target" ];
+        serviceConfig.Type = "simple";
+        startLimitIntervalSec = 0;
+        serviceConfig.Restart = "on-failure";
+        serviceConfig.RestartSec = 60;
+        script = config.system.build.puteron_script;
       };
     };
+  };
 }

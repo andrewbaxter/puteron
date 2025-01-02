@@ -1,8 +1,10 @@
 use {
     aargvark::Aargvark,
     demon::DemonCommands,
-    loga::fatal,
     task::TaskCommands,
+    tracing::{
+        level_filters::LevelFilter,
+    },
 };
 
 pub mod demon;
@@ -20,21 +22,22 @@ enum ArgCommand {
 #[derive(Aargvark)]
 struct Args {
     command: ArgCommand,
+    /// Log at debug level
+    debug: Option<()>,
 }
 
-fn main() {
-    tracing_subscriber::fmt::init();
-
-    fn inner() -> Result<(), loga::Error> {
-        match aargvark::vark::<Args>().command {
-            ArgCommand::Task(command) => task::main(command)?,
-            ArgCommand::Demon(command) => demon::main(command)?,
-        }
-        return Ok(());
+fn main() -> Result<(), loga::Error> {
+    let args = aargvark::vark::<Args>();
+    tracing::subscriber::set_global_default(
+        tracing_subscriber::fmt::Subscriber::builder().with_max_level(if args.debug.is_some() {
+            LevelFilter::DEBUG
+        } else {
+            LevelFilter::INFO
+        }).finish(),
+    ).unwrap();
+    match args.command {
+        ArgCommand::Task(command) => task::main(command)?,
+        ArgCommand::Demon(command) => demon::main(command)?,
     }
-
-    match inner() {
-        Ok(_) => { },
-        Err(e) => fatal(e),
-    }
+    return Ok(());
 }

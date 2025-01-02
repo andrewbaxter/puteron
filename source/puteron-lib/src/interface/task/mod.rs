@@ -13,7 +13,7 @@ use {
 };
 
 #[derive(Serialize, Deserialize, Clone, JsonSchema, PartialEq, Eq)]
-#[serde(rename = "snake_case", deny_unknown_fields)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct Environment {
     /// If present, a map of environment variables and a bool, whether inherit from the
     /// context's parent environment variable pool. The bool is required for allowing
@@ -36,7 +36,7 @@ impl Default for Environment {
 /// started state, and cause the dependent to stop when they leave started state.
 /// Additional behaviors are indicated in this struct.
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
-#[serde(rename = "snake_case", deny_unknown_fields)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum DependencyType {
     /// Sets `transitive_on` in the dependency when the dependent is `on` (i.e. turns
     /// on deps that are off).
@@ -45,7 +45,7 @@ pub enum DependencyType {
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, PartialEq, Eq)]
-#[serde(rename = "snake_case", deny_unknown_fields)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum FiniteTaskEndAction {
     /// Nothing happens, task continues to be considered on and started.
     None,
@@ -63,16 +63,16 @@ impl Default for FiniteTaskEndAction {
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, PartialEq, Eq)]
-#[serde(rename = "snake_case", deny_unknown_fields)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct TaskSpecEmpty {
     #[serde(default)]
     pub upstream: HashMap<String, DependencyType>,
     #[serde(default)]
-    pub default_off: bool,
+    pub default_on: bool,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, PartialEq, Eq)]
-#[serde(rename = "snake_case", deny_unknown_fields)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct Command {
     #[serde(default)]
     pub working_directory: Option<PathBuf>,
@@ -82,7 +82,7 @@ pub struct Command {
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, PartialEq, Eq)]
-#[serde(rename = "snake_case", deny_unknown_fields)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum StartedCheck {
     /// Consider started when this tcp socket has a listener
     TcpSocket(SocketAddr),
@@ -91,12 +91,12 @@ pub enum StartedCheck {
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, PartialEq, Eq)]
-#[serde(rename = "snake_case", deny_unknown_fields)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct TaskSpecPerpetual {
     #[serde(default)]
     pub upstream: HashMap<String, DependencyType>,
     #[serde(default)]
-    pub default_off: bool,
+    pub default_on: bool,
     /// Command to run
     pub command: Command,
     /// How to determine if command has started - otherwise immediately transition to
@@ -112,12 +112,12 @@ pub struct TaskSpecPerpetual {
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, PartialEq, Eq)]
-#[serde(rename = "snake_case", deny_unknown_fields)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct TaskSpecFinite {
     #[serde(default)]
     pub upstream: HashMap<String, DependencyType>,
     #[serde(default)]
-    pub default_off: bool,
+    pub default_on: bool,
     /// Command to run
     pub command: Command,
     /// Which exit codes are considered success.  By default, `0`.
@@ -135,7 +135,7 @@ pub struct TaskSpecFinite {
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone)]
-#[serde(rename = "snake_case", deny_unknown_fields)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Task {
     /// This is a task that has no internal state or process, etc, but can be used as a
     /// node in the graph for grouping other tasks (a.k.a. a target or loosely, a

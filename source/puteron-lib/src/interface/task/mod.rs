@@ -46,7 +46,7 @@ pub enum DependencyType {
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub enum FiniteTaskEndAction {
+pub enum ShortTaskEndAction {
     /// Nothing happens, task continues to be considered on and started.
     None,
     /// Set the user-on state to `false` once the task ends.
@@ -56,7 +56,7 @@ pub enum FiniteTaskEndAction {
     Delete,
 }
 
-impl Default for FiniteTaskEndAction {
+impl Default for ShortTaskEndAction {
     fn default() -> Self {
         return Self::None;
     }
@@ -92,7 +92,7 @@ pub enum StartedCheck {
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub struct TaskSpecPerpetual {
+pub struct TaskSpecLong {
     #[serde(default)]
     pub upstream: HashMap<String, DependencyType>,
     #[serde(default)]
@@ -113,7 +113,7 @@ pub struct TaskSpecPerpetual {
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub struct TaskSpecFinite {
+pub struct TaskSpecShort {
     #[serde(default)]
     pub upstream: HashMap<String, DependencyType>,
     #[serde(default)]
@@ -125,7 +125,7 @@ pub struct TaskSpecFinite {
     pub success_codes: Vec<i32>,
     /// What to do when the command succeeds
     #[serde(default)]
-    pub started_action: FiniteTaskEndAction,
+    pub started_action: ShortTaskEndAction,
     /// How long to wait between restarts when the command exits. Defaults to 60s.
     #[serde(default)]
     pub restart_delay: Option<SimpleDuration>,
@@ -145,13 +145,13 @@ pub enum Task {
     Empty(TaskSpecEmpty),
     /// A task that continues to run until stopped.
     ///
-    /// Perpetual tasks are considered started immediately, unless a `start_check`
-    /// command is provided.
-    Perpetual(TaskSpecPerpetual),
+    /// Long tasks are considered started immediately, unless a `start_check` command
+    /// is provided.
+    Long(TaskSpecLong),
     /// A task that stops on its own (a.k.a one shot).
     ///
-    /// Finite tasks are considered started once they successfully exit.
-    Finite(TaskSpecFinite),
+    /// Short tasks are considered started once they successfully exit.
+    Short(TaskSpecShort),
     /// An external task is a task where the state is determined by an external process
     /// that communicates with puteron via API to communicate state changes.  Since it
     /// is externally managed, it can have no dependencies.

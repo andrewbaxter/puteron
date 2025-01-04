@@ -105,7 +105,7 @@ pub enum ProcState {
 
 #[derive(Serialize, Deserialize, Clone, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub struct TaskStatusSpecificPerpetual {
+pub struct TaskStatusSpecificLong {
     pub state: ProcState,
     pub state_at: DateTime<Utc>,
     pub pid: Option<i32>,
@@ -114,7 +114,7 @@ pub struct TaskStatusSpecificPerpetual {
 
 #[derive(Serialize, Deserialize, Clone, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub struct TaskStatusSpecificFinite {
+pub struct TaskStatusSpecificShort {
     pub state: ProcState,
     pub state_at: DateTime<Utc>,
     pub pid: Option<i32>,
@@ -125,8 +125,8 @@ pub struct TaskStatusSpecificFinite {
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum TaskStatusSpecific {
     Empty(TaskStatusSpecificEmpty),
-    Perpetual(TaskStatusSpecificPerpetual),
-    Finite(TaskStatusSpecificFinite),
+    Long(TaskStatusSpecificLong),
+    Short(TaskStatusSpecificShort),
     External,
 }
 
@@ -188,12 +188,24 @@ impl RequestTrait for RequestTaskWaitStopped {
 
 #[derive(Serialize, Deserialize, Clone, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub struct TaskUpstreamStatus {
-    pub task: TaskId,
+pub struct TaskDependencyStatusMissing {
+    pub dependency_type: DependencyType,
+}
+
+#[derive(Serialize, Deserialize, Clone, JsonSchema)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct TaskDependencyStatusPresent {
     pub on: bool,
     pub started: bool,
     pub dependency_type: DependencyType,
-    pub related: HashMap<TaskId, Option<TaskUpstreamStatus>>,
+    pub related: HashMap<TaskId, TaskDependencyStatus>,
+}
+
+#[derive(Serialize, Deserialize, Clone, JsonSchema)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum TaskDependencyStatus {
+    Missing(TaskDependencyStatusMissing),
+    Present(TaskDependencyStatusPresent),
 }
 
 #[derive(Serialize, Deserialize, Clone, JsonSchema)]
@@ -207,16 +219,7 @@ impl Into<Request> for RequestTaskShowUpstream {
 }
 
 impl RequestTrait for RequestTaskShowUpstream {
-    type Response = Result<HashMap<TaskId, Option<TaskUpstreamStatus>>, String>;
-}
-
-#[derive(Serialize, Deserialize, Clone, JsonSchema)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub struct TaskDownstreamStatus {
-    pub task: TaskId,
-    pub on: bool,
-    pub started: bool,
-    pub related: HashMap<TaskId, Option<TaskDownstreamStatus>>,
+    type Response = Result<HashMap<TaskId, TaskDependencyStatus>, String>;
 }
 
 #[derive(Serialize, Deserialize, Clone, JsonSchema)]
@@ -230,7 +233,7 @@ impl Into<Request> for RequestTaskShowDownstream {
 }
 
 impl RequestTrait for RequestTaskShowDownstream {
-    type Response = Result<HashMap<TaskId, Option<TaskDownstreamStatus>>, String>;
+    type Response = Result<HashMap<TaskId, TaskDependencyStatus>, String>;
 }
 
 // # Demon

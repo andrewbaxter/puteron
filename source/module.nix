@@ -74,7 +74,7 @@
                 };
               });
             };
-            perpetual = lib.mkOption {
+            long = lib.mkOption {
               default = null;
               type = lib.types.nullOr (lib.types.submodule {
                 options = {
@@ -99,7 +99,7 @@
                 };
               });
             };
-            finite = lib.mkOption {
+            short = lib.mkOption {
               default = null;
               type = lib.types.nullOr (lib.types.submodule {
                 options = {

@@ -1,5 +1,8 @@
 use {
-    crate::duration::SimpleDuration,
+    crate::time::{
+        SimpleDuration,
+    },
+    schedule::Rule,
     schemars::JsonSchema,
     serde::{
         Deserialize,
@@ -11,6 +14,8 @@ use {
         path::PathBuf,
     },
 };
+
+pub mod schedule;
 
 #[derive(Serialize, Deserialize, Clone, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
@@ -42,24 +47,6 @@ pub enum DependencyType {
     /// on deps that are off).
     Strong,
     Weak,
-}
-
-#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, PartialEq, Eq)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub enum ShortTaskEndAction {
-    /// Nothing happens, task continues to be considered on and started.
-    None,
-    /// Set the user-on state to `false` once the task ends.
-    TurnOff,
-    /// Delete the task once the task ends. It will no longer show up in output and
-    /// will be considered off.
-    Delete,
-}
-
-impl Default for ShortTaskEndAction {
-    fn default() -> Self {
-        return Self::None;
-    }
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, PartialEq, Eq)]
@@ -111,13 +98,31 @@ pub struct TaskSpecLong {
     pub stop_timeout: Option<SimpleDuration>,
 }
 
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum ShortTaskStartedAction {
+    /// Nothing happens, task continues to be considered on and started. This is the
+    /// default if the task is not scheduled and a started action isn't specified.
+    None,
+    /// Set the user-on state to `false` once the task ends. This is the default if the
+    /// task is scheduled and a started action isn't specified.
+    TurnOff,
+    /// Delete the task once the task ends. It will no longer show up in output and
+    /// will be considered off.
+    Delete,
+}
+
 #[derive(Serialize, Deserialize, JsonSchema, Clone, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct TaskSpecShort {
     #[serde(default)]
     pub upstream: HashMap<String, DependencyType>,
+    /// Turn the task on as soon as it is loaded
     #[serde(default)]
     pub default_on: bool,
+    /// Turn the task on on a schedule
+    #[serde(default)]
+    pub schedule: Vec<Rule>,
     /// Command to run
     pub command: Command,
     /// Which exit codes are considered success.  By default, `0`.
@@ -125,7 +130,7 @@ pub struct TaskSpecShort {
     pub success_codes: Vec<i32>,
     /// What to do when the command succeeds
     #[serde(default)]
-    pub started_action: ShortTaskEndAction,
+    pub started_action: Option<ShortTaskStartedAction>,
     /// How long to wait between restarts when the command exits. Defaults to 60s.
     #[serde(default)]
     pub restart_delay: Option<SimpleDuration>,

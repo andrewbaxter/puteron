@@ -1,4 +1,5 @@
 use {
+    super::schedule::ScheduleDynamic,
     chrono::{
         DateTime,
         Utc,
@@ -20,9 +21,16 @@ use {
         },
         collections::HashMap,
         path::PathBuf,
-        sync::Mutex,
+        sync::{
+            Arc,
+            Mutex,
+        },
     },
-    tokio::sync::oneshot,
+    tokio::sync::{
+        oneshot,
+        Notify,
+    },
+    tokio_util::task::TaskTracker,
 };
 
 pub(crate) struct TaskStateEmpty {
@@ -71,12 +79,15 @@ pub(crate) struct StateDynamic {
     pub(crate) downstream: HashMap<TaskId, HashMap<TaskId, DependencyType>>,
     // Downstream tasks are guaranteed to exist. Upstream tasks may or may not exist.
     pub(crate) tasks: HashMap<TaskId, TaskState>,
+    pub(crate) schedule: ScheduleDynamic,
+    pub(crate) notify_reschedule: Arc<Notify>,
 }
 
 pub(crate) struct State {
     pub(crate) task_dirs: Vec<PathBuf>,
     pub(crate) env: HashMap<String, String>,
     pub(crate) dynamic: Mutex<StateDynamic>,
+    pub(crate) tokio_tasks: TaskTracker,
 }
 
 pub(crate) fn task_started(t: &TaskState_) -> bool {

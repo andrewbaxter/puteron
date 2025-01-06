@@ -78,12 +78,12 @@ pub(crate) enum TaskCommands {
     ///
     /// Exits immediately if the task has already started. Exits with an error if the
     /// task is turned off.
-    WaitStarted(TaskId),
+    WaitUntilStarted(TaskId),
     /// Wait for a task to stop.
     ///
     /// Exits immediately if the task has already stopped. Exits with an error if the
     /// task is turned on.
-    WaitStopped(TaskId),
+    WaitUntilStopped(TaskId),
     /// List tasks upstream of a task, plus their control and current states.
     ListUpstream(TaskId),
     /// List tasks downstream of a task, plus their control and current states.
@@ -145,10 +145,10 @@ pub(crate) fn main(command: TaskCommands) -> Result<(), loga::Error> {
                     on: false,
                 }).await?.map_err(loga::err)?;
             },
-            TaskCommands::WaitStarted(task_id) => {
+            TaskCommands::WaitUntilStarted(task_id) => {
                 client_req(RequestTaskWaitStarted(task_id)).await?.map_err(loga::err)?;
             },
-            TaskCommands::WaitStopped(task_id) => {
+            TaskCommands::WaitUntilStopped(task_id) => {
                 client_req(RequestTaskWaitStopped(task_id)).await?.map_err(loga::err)?;
             },
             TaskCommands::ListUpstream(task_id) => {

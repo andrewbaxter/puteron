@@ -5,6 +5,7 @@ use {
 
 mod run;
 mod state;
+mod schedule;
 
 #[derive(Aargvark)]
 #[vark(break_help)]

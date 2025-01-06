@@ -3,8 +3,20 @@
   options = {
     puteron =
       let
+        submodule = spec: lib.types.submodule { options = spec; };
         submoduleEnum = spec: lib.types.addCheck
-          (lib.types.submodule { options = spec; })
+          (lib.types.submodule {
+            options = lib.listToAttrs
+              (map
+                (e: {
+                  name = e.name;
+                  value = lib.mkOption {
+                    default = null;
+                    type = lib.types.nullOr e.value;
+                  };
+                })
+                (lib.attrsToList spec));
+          })
           (v: builtins.length (lib.attrsToList v) == 1);
         upstreamArg = lib.mkOption {
           default = null;
@@ -16,16 +28,14 @@
         };
         envArg = lib.mkOption {
           default = null;
-          type = lib.types.nullOr (lib.types.submodule {
-            options = {
-              clear = lib.mkOption {
-                default = null;
-                type = lib.types.nullOr (lib.types.attrsOf lib.types.bool);
-              };
-              add = lib.mkOption {
-                default = null;
-                type = lib.types.nullOr (lib.types.attrsOf lib.types.str);
-              };
+          type = lib.types.nullOr (submodule {
+            clear = lib.mkOption {
+              default = null;
+              type = lib.types.nullOr (lib.types.attrsOf lib.types.bool);
+            };
+            add = lib.mkOption {
+              default = null;
+              type = lib.types.nullOr (lib.types.attrsOf lib.types.str);
             };
           });
         };
@@ -36,16 +46,14 @@
           description = "Like 10s or 5m";
         };
         commandArg = lib.mkOption {
-          type = lib.types.submodule {
-            options = {
-              working_directory = lib.mkOption {
-                default = null;
-                type = lib.types.nullOr lib.types.str;
-              };
-              environment = envArg;
-              command = lib.mkOption {
-                type = lib.types.listOf lib.types.str;
-              };
+          type = submodule {
+            working_directory = lib.mkOption {
+              default = null;
+              type = lib.types.nullOr lib.types.str;
+            };
+            environment = envArg;
+            command = lib.mkOption {
+              type = lib.types.listOf lib.types.str;
             };
           };
         };
@@ -65,63 +73,82 @@
         tasks = lib.mkOption {
           description = "See puteron documentation for field details";
           type = lib.types.attrsOf (submoduleEnum {
-            empty = lib.mkOption {
-              default = null;
-              type = lib.types.nullOr (lib.types.submodule {
-                options = {
-                  upstream = upstreamArg;
-                  default_on = defaultOnArg;
-                };
-              });
+            external = lib.types.str;
+            empty = submodule {
+              upstream = upstreamArg;
+              default_on = defaultOnArg;
             };
-            long = lib.mkOption {
-              default = null;
-              type = lib.types.nullOr (lib.types.submodule {
-                options = {
-                  upstream = upstreamArg;
-                  default_on = defaultOnArg;
-                  command = commandArg;
-                  started_check = lib.mkOption {
-                    default = null;
-                    type = lib.types.nullOr (submoduleEnum {
-                      tcp_socket = lib.mkOption {
-                        default = null;
-                        type = lib.types.nullOr lib.types.str;
-                      };
-                      path = lib.mkOption {
-                        default = null;
-                        type = lib.types.nullOr lib.types.str;
-                      };
-                    });
-                  };
-                  restart_delay = durationArg;
-                  stop_timeout = durationArg;
-                };
-              });
+            long = submodule {
+              upstream = upstreamArg;
+              default_on = defaultOnArg;
+              command = commandArg;
+              started_check = lib.mkOption {
+                default = null;
+                type = lib.types.nullOr (submoduleEnum {
+                  tcp_socket = lib.types.str;
+                  path = lib.types.str;
+                });
+              };
+              restart_delay = durationArg;
+              stop_timeout = durationArg;
             };
-            short = lib.mkOption {
-              default = null;
-              type = lib.types.nullOr (lib.types.submodule {
-                options = {
-                  upstream = upstreamArg;
-                  default_on = defaultOnArg;
-                  command = commandArg;
-                  success_codes = lib.mkOption {
-                    default = null;
-                    type = lib.types.nullOr (lib.types.listOf lib.types.int);
+            short = submodule {
+              upstream = upstreamArg;
+              default_on = defaultOnArg;
+              schedule = lib.mkOption {
+                default = null;
+                type = lib.types.listOf (submoduleEnum {
+                  period = submodule {
+                    period = lib.mkOption {
+                      type = lib.types.str;
+                    };
+                    scattered = lib.mkOption {
+                      default = null;
+                      type = lib.types.nullOr lib.types.bool;
+                    };
                   };
-                  started_action = lib.mkOption {
-                    default = null;
-                    type = lib.types.nullOr lib.types.enum [ "turn_off" "delete" ];
+                  hourly = lib.types.str;
+                  daily = lib.types.str;
+                  weekly = submodule {
+                    weekday = lib.mkOption {
+                      type = lib.types.str;
+                    };
+                    time = lib.mkOption {
+                      type = lib.types.str;
+                    };
                   };
-                  restart_delay = durationArg;
-                  stop_timeout = durationArg;
-                };
-              });
-            };
-            external = lib.mkOption {
-              default = null;
-              type = lib.types.nullOr lib.types.str;
+                  monthly = submodule {
+                    day = lib.mkOption {
+                      type = lib.types.int;
+                    };
+                    time = lib.mkOption {
+                      type = lib.types.str;
+                    };
+                  };
+                  yearly = submodule {
+                    month = lib.mkOption {
+                      type = lib.types.str;
+                    };
+                    day = lib.mkOption {
+                      type = lib.types.int;
+                    };
+                    time = lib.mkOption {
+                      type = lib.types.str;
+                    };
+                  };
+                });
+              };
+              command = commandArg;
+              success_codes = lib.mkOption {
+                default = null;
+                type = lib.types.nullOr (lib.types.listOf lib.types.int);
+              };
+              started_action = lib.mkOption {
+                default = null;
+                type = lib.types.nullOr (lib.types.enum [ "turn_off" "delete" ]);
+              };
+              restart_delay = durationArg;
+              stop_timeout = durationArg;
             };
           });
         };
@@ -134,12 +161,19 @@
     };
     system.build.puteron_script = pkgs.writeShellScript "puteron-run" (
       let
-        tasks = builtins.listToAttrs (map
-          (t: {
-            name = t.name;
-            value = lib.attrsets.filterAttrsRecursive (k: v: v != null) t.value;
-          })
-          (lib.attrsToList config.puteron.tasks));
+        removeAttrsNull = v:
+          if builtins.isAttrs v then
+            lib.listToAttrs
+              (map
+                (e: { name = e.name; value = removeAttrsNull e.value; })
+                (builtins.filter
+                  (e: e.value != null)
+                  (lib.attrsToList v)
+                )
+              )
+          else if builtins.isList v then map removeAttrsNull v
+          else v;
+        tasks = removeAttrsNull config.puteron.tasks;
         taskDirs = derivation {
           name = "puteron-task-configs";
           system = builtins.currentSystem;

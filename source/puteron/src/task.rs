@@ -1,8 +1,6 @@
 use {
     crate::{
-        ipc::{
-            client_req,
-        },
+        ipc::client_req,
         spec::merge_specs,
     },
     aargvark::{
@@ -25,20 +23,19 @@ use {
                 RequestTaskDelete,
                 RequestTaskGetSpec,
                 RequestTaskGetStatus,
-                RequestTaskShowDownstream,
-                RequestTaskShowUpstream,
+                RequestTaskListDownstream,
+                RequestTaskListUpstream,
+                RequestTaskListUserOn,
                 RequestTaskWaitStarted,
                 RequestTaskWaitStopped,
             },
         },
     },
-    tokio::{
-        runtime,
-    },
+    tokio::runtime,
 };
 
 #[derive(Aargvark)]
-pub(crate) struct AddArgs {
+pub(crate) struct LoadArgs {
     /// ID to assign new task.
     task: TaskId,
     /// JSON task specification.
@@ -51,21 +48,21 @@ pub(crate) struct AddArgs {
 #[vark(break_help)]
 pub(crate) enum TaskCommands {
     /// Load or replace a task from a single config specified via arguments.
-    Add(AddArgs),
+    Load(LoadArgs),
     /// Load or replace a task with the specified id from the demon task configuration
     /// directories.
-    Load(TaskId),
+    LoadStored(TaskId),
     /// Show the merged spec for a task from the demon task configuration directories,
     /// as it would be loaded.
-    PreviewLoad(TaskId),
+    PreviewStored(TaskId),
     /// Stop and unload a task.
     ///
     /// No error if the task is already deleted.
     Delete(TaskId),
     /// Get various runtime info about a task.
-    GetStatus(TaskId),
+    Status(TaskId),
     /// Get the merged loaded spec for a task.
-    GetSpec(TaskId),
+    Spec(TaskId),
     /// Turn a task on.
     ///
     /// No error if the task is already on.
@@ -84,6 +81,8 @@ pub(crate) enum TaskCommands {
     /// Exits immediately if the task has already stopped. Exits with an error if the
     /// task is turned on.
     WaitUntilStopped(TaskId),
+    /// List tasks that are user-on.
+    ListUserOn,
     /// List tasks upstream of a task, plus their control and current states.
     ListUpstream(TaskId),
     /// List tasks downstream of a task, plus their control and current states.
@@ -95,14 +94,14 @@ pub(crate) fn main(command: TaskCommands) -> Result<(), loga::Error> {
     return rt.block_on(async move {
         ta_return!((), loga::Error);
         match command {
-            TaskCommands::Add(args) => {
+            TaskCommands::Load(args) => {
                 client_req(RequestAdd {
                     task: args.task,
                     spec: args.spec.value,
                     unique: args.unique.is_some(),
                 }).await?.map_err(loga::err)?;
             },
-            TaskCommands::Load(task_id) => {
+            TaskCommands::LoadStored(task_id) => {
                 let dirs = client_req(RequestDemonSpecDirs {}).await?.map_err(loga::err)?;
                 let spec =
                     merge_specs(&dirs, Some(&task_id))?
@@ -114,7 +113,7 @@ pub(crate) fn main(command: TaskCommands) -> Result<(), loga::Error> {
                     unique: false,
                 }).await?.map_err(loga::err)?;
             },
-            TaskCommands::PreviewLoad(task_id) => {
+            TaskCommands::PreviewStored(task_id) => {
                 let dirs = client_req(RequestDemonSpecDirs {}).await?.map_err(loga::err)?;
                 let spec =
                     merge_specs(&dirs, Some(&task_id))?
@@ -125,11 +124,11 @@ pub(crate) fn main(command: TaskCommands) -> Result<(), loga::Error> {
             TaskCommands::Delete(task_id) => {
                 client_req(RequestTaskDelete(task_id)).await?.map_err(loga::err)?;
             },
-            TaskCommands::GetStatus(task_id) => {
+            TaskCommands::Status(task_id) => {
                 let status = client_req(RequestTaskGetStatus(task_id)).await?.map_err(loga::err)?;
                 println!("{}", serde_json::to_string_pretty(&status).unwrap());
             },
-            TaskCommands::GetSpec(task_id) => {
+            TaskCommands::Spec(task_id) => {
                 let spec = client_req(RequestTaskGetSpec(task_id)).await?.map_err(loga::err)?;
                 println!("{}", serde_json::to_string_pretty(&spec).unwrap());
             },
@@ -151,11 +150,19 @@ pub(crate) fn main(command: TaskCommands) -> Result<(), loga::Error> {
             TaskCommands::WaitUntilStopped(task_id) => {
                 client_req(RequestTaskWaitStopped(task_id)).await?.map_err(loga::err)?;
             },
+            TaskCommands::ListUserOn => {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(
+                        &client_req(RequestTaskListUserOn).await?.map_err(loga::err)?,
+                    ).unwrap()
+                );
+            },
             TaskCommands::ListUpstream(task_id) => {
                 println!(
                     "{}",
                     serde_json::to_string_pretty(
-                        &client_req(RequestTaskShowUpstream(task_id)).await?.map_err(loga::err)?,
+                        &client_req(RequestTaskListUpstream(task_id)).await?.map_err(loga::err)?,
                     ).unwrap()
                 );
             },
@@ -163,7 +170,7 @@ pub(crate) fn main(command: TaskCommands) -> Result<(), loga::Error> {
                 println!(
                     "{}",
                     serde_json::to_string_pretty(
-                        &client_req(RequestTaskShowDownstream(task_id)).await?.map_err(loga::err)?,
+                        &client_req(RequestTaskListDownstream(task_id)).await?.map_err(loga::err)?,
                     ).unwrap()
                 );
             },

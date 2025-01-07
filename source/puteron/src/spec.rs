@@ -6,7 +6,10 @@ use {
     },
     puteron_lib::interface,
     std::{
-        collections::HashMap,
+        collections::{
+            BTreeMap,
+            HashMap,
+        },
         fs::read_dir,
         io::ErrorKind,
         path::PathBuf,
@@ -17,7 +20,7 @@ use {
 pub(crate) fn merge_specs(
     dirs: &[PathBuf],
     filter: Option<&str>,
-) -> Result<HashMap<String, interface::task::Task>, loga::Error> {
+) -> Result<BTreeMap<String, interface::task::Task>, loga::Error> {
     let mut task_json = HashMap::new();
     for dir in dirs {
         let dir_entries = match read_dir(&dir) {
@@ -79,7 +82,7 @@ pub(crate) fn merge_specs(
             task_json.insert(task_name, config);
         }
     }
-    let mut tasks = HashMap::new();
+    let mut tasks = BTreeMap::new();
     for (id, value) in task_json {
         let config =
             serde_json::from_value::<interface::task::Task>(

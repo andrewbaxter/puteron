@@ -27,6 +27,8 @@ pub trait RequestTrait: Serialize + DeserializeOwned + Into<Request> {
 }
 
 // # Task
+//
+// Add
 #[derive(Serialize, Deserialize, Clone, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct RequestAdd {
@@ -46,6 +48,7 @@ impl RequestTrait for RequestAdd {
     type Response = Result<(), String>;
 }
 
+// On/off
 #[derive(Serialize, Deserialize, Clone, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct RequestTaskOn {
@@ -63,6 +66,7 @@ impl RequestTrait for RequestTaskOn {
     type Response = Result<(), String>;
 }
 
+// Delete
 #[derive(Serialize, Deserialize, Clone, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct RequestTaskDelete(pub TaskId);
@@ -77,6 +81,7 @@ impl RequestTrait for RequestTaskDelete {
     type Response = Result<(), String>;
 }
 
+// Status
 #[derive(Serialize, Deserialize, Clone, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct RequestTaskGetStatus(pub TaskId);
@@ -144,6 +149,7 @@ impl RequestTrait for RequestTaskGetStatus {
     type Response = Result<TaskStatus, String>;
 }
 
+// Get spec
 #[derive(Serialize, Deserialize, Clone, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct RequestTaskGetSpec(pub TaskId);
@@ -158,6 +164,7 @@ impl RequestTrait for RequestTaskGetSpec {
     type Response = Result<Task, String>;
 }
 
+// Wait started
 #[derive(Serialize, Deserialize, Clone, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct RequestTaskWaitStarted(pub TaskId);
@@ -172,6 +179,7 @@ impl RequestTrait for RequestTaskWaitStarted {
     type Response = Result<(), String>;
 }
 
+// Wait stopped
 #[derive(Serialize, Deserialize, Clone, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct RequestTaskWaitStopped(pub TaskId);
@@ -186,15 +194,25 @@ impl RequestTrait for RequestTaskWaitStopped {
     type Response = Result<(), String>;
 }
 
+// List user-on
 #[derive(Serialize, Deserialize, Clone, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub struct TaskDependencyStatusMissing {
-    pub dependency_type: DependencyType,
+pub struct RequestTaskListUserOn;
+
+impl Into<Request> for RequestTaskListUserOn {
+    fn into(self) -> Request {
+        return Request::TaskListUserOn(self);
+    }
 }
 
+impl RequestTrait for RequestTaskListUserOn {
+    type Response = Result<Vec<TaskId>, String>;
+}
+
+// List upstream
 #[derive(Serialize, Deserialize, Clone, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub struct TaskDependencyStatusPresent {
+pub struct TaskDependencyStatus {
     pub on: bool,
     pub started: bool,
     pub dependency_type: DependencyType,
@@ -203,40 +221,51 @@ pub struct TaskDependencyStatusPresent {
 
 #[derive(Serialize, Deserialize, Clone, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub enum TaskDependencyStatus {
-    Missing(TaskDependencyStatusMissing),
-    Present(TaskDependencyStatusPresent),
-}
+pub struct RequestTaskListUpstream(pub TaskId);
 
-#[derive(Serialize, Deserialize, Clone, JsonSchema)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub struct RequestTaskShowUpstream(pub TaskId);
-
-impl Into<Request> for RequestTaskShowUpstream {
+impl Into<Request> for RequestTaskListUpstream {
     fn into(self) -> Request {
-        return Request::TaskShowUpstream(self);
+        return Request::TaskListUpstream(self);
     }
 }
 
-impl RequestTrait for RequestTaskShowUpstream {
+impl RequestTrait for RequestTaskListUpstream {
     type Response = Result<HashMap<TaskId, TaskDependencyStatus>, String>;
 }
 
+// List downstream
 #[derive(Serialize, Deserialize, Clone, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub struct RequestTaskShowDownstream(pub TaskId);
+pub struct RequestTaskListDownstream(pub TaskId);
 
-impl Into<Request> for RequestTaskShowDownstream {
+impl Into<Request> for RequestTaskListDownstream {
     fn into(self) -> Request {
-        return Request::TaskShowDownstream(self);
+        return Request::TaskListDownstream(self);
     }
 }
 
-impl RequestTrait for RequestTaskShowDownstream {
+impl RequestTrait for RequestTaskListDownstream {
     type Response = Result<HashMap<TaskId, TaskDependencyStatus>, String>;
 }
 
 // # Demon
+//
+// Effective environment
+#[derive(Serialize, Deserialize, Clone, JsonSchema)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct RequestDemonEnv;
+
+impl Into<Request> for RequestDemonEnv {
+    fn into(self) -> Request {
+        return Request::DemonEnv(self);
+    }
+}
+
+impl RequestTrait for RequestDemonEnv {
+    type Response = Result<HashMap<String, String>, String>;
+}
+
+// Spec dirs
 #[derive(Serialize, Deserialize, Clone, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct RequestDemonSpecDirs {}
@@ -262,7 +291,9 @@ pub enum Request {
     TaskOn(RequestTaskOn),
     TaskWaitStarted(RequestTaskWaitStarted),
     TaskWaitStopped(RequestTaskWaitStopped),
-    TaskShowUpstream(RequestTaskShowUpstream),
-    TaskShowDownstream(RequestTaskShowDownstream),
+    TaskListUserOn(RequestTaskListUserOn),
+    TaskListUpstream(RequestTaskListUpstream),
+    TaskListDownstream(RequestTaskListDownstream),
+    DemonEnv(RequestDemonEnv),
     DemonSpecDirs(RequestDemonSpecDirs),
 }

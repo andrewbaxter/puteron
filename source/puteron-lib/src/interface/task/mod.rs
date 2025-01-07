@@ -17,24 +17,22 @@ use {
 
 pub mod schedule;
 
-#[derive(Serialize, Deserialize, Clone, JsonSchema, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, JsonSchema, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct Environment {
-    /// If present, a map of environment variables and a bool, whether inherit from the
-    /// context's parent environment variable pool. The bool is required for allowing
-    /// overrides when merging configs, normally all entries would be `true`.
-    pub clear: Option<HashMap<String, bool>>,
+    /// Don't inherit any environment variables from the demon environment.
+    #[serde(default)]
+    pub clean: bool,
+    /// A map of environment variables and a bool, whether inherit from the context's
+    /// parent environment variable pool. The bool is required for allowing overrides
+    /// when merging configs, normally all entries would be `true`.
+    ///
+    /// This is ignored unless `clean` is `true`.
+    #[serde(default)]
+    pub keep: HashMap<String, bool>,
     /// Add or override the following environment variables;
+    #[serde(default)]
     pub add: HashMap<String, String>,
-}
-
-impl Default for Environment {
-    fn default() -> Self {
-        return Self {
-            clear: Some([].into_iter().collect()),
-            add: Default::default(),
-        };
-    }
 }
 
 /// All dependencies will prevent the dependent from starting until they've reached

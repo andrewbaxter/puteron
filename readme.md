@@ -4,25 +4,27 @@ Puteron is a process manager, like SystemD or Runit or Shepherd or any number of
 
 Here's a quick comparison to SystemD:
 
-- Like SystemD, represents tasks (services) as a graph
+- Represents tasks (services) as a graph (like SystemD)
 
-- Easy to reason about and robust one-directional control flow
+- Separate user control state (what you instructed it to do) from operational state (what circumstances forced)
+
+- Easy to reason about one-directional dependencies
 
 - JSON everywhere: configs, command output, command input
 
 - Does one thing: manage processes
 
-# Nutshell
+# Using it, in a nutshell
 
-1. Define tasks (services, processes, jobs) with JSON - see the task JSON specification below
+Build `puteron` with `cargo build` (or get it some other way).
 
-2. Define Puteron config: see the config JSON specification below
+1. Define task (service/job) config and put them in a directory - see the task JSON specification below
 
-3. Put the task JSON in the task directories where they'll be merged (by name) and loaded at startup
+2. Define the `puteron` config and specify the above task directory - see the config JSON specification below
 
-4. Run Puteron with `puteron demon run config.json`
+3. Run `puteron demon run config.json`
 
-# Graph logic
+# Architecture
 
 ## Control and actual state
 
@@ -58,13 +60,9 @@ These two states are significant for dependency calculations/graph management.
 
 Under the hood though there's a more fine grained state, with a multi-step startup and stop process.
 
-### Non-existant and deleted tasks
-
-Non-existant and deleted tasks are considered `off` and `stopped` for dependency calculations.
-
 ## Starting and stopping tasks
 
-When a task becomes `on`, any `strong` upstream dependencies of the task will be started (per `transitive_on` behavior). The task itself won't be started until every dependency has started. You can see which tasks affect startup using `puteron task list-upstream`.
+When a task becomes `on`, any `strong` upstream dependencies of the task will be started (per `transitive_on` behavior). The task itself won't be started until every dependency has started. You can see which tasks affect startup using `puteron task upstream`.
 
 When a task becomes `off`, once any dependents have stopped, the task will be stopped (if a processes, signalled), and once the process finishes for this task it will repeat for any dependencies that have also become `off`.
 
@@ -115,7 +113,7 @@ All control is done via unix-domain stream sockets with 64-bit LE length-framed 
 
 So I should have taken better notes, but IIRC I had a server that primarily ran a single service, and I wanted that service always up.
 
-The behavior was pretty simple: I wanted the service to start at boot, I wanted dependencies to be automatically started, I wanted it to start _after_ its dependencies, and if a dependency failed (e.g. network disk went away temporarily) the chain of dependencies should be stopped until the disk came back, in which they would be restarted again in dependency-order. And if I stopped the service, any unused dependencies should be stopped too.
+The behavior was pretty straight forward: I wanted the service to start at boot, I wanted dependencies to be automatically started, I wanted it to start _after_ its dependencies, and if a dependency failed (e.g. network disk went away temporarily) the chain of dependencies should be stopped until the disk came back, in which they would be restarted again in dependency-order. And if I stopped the service, any unused dependencies should be stopped too.
 
 AFAICT this was not possible in SystemD... (at time of writing)
 
@@ -125,11 +123,11 @@ AFAICT this was not possible in SystemD... (at time of writing)
 - `Upholds` - constantly restarts services that are down, filling the logs with spam and potentially causing other issues
 - Other combinations of the above, inappropriate use of other parameters, etc
 
-The names rely on (IMO) made up distinctions between near-synonyms to convey their intent. Just figuring out the differences between those took a good few hours, and I guarantee that I can't 100% predict their behavior still ([I'm not alone](https://pychao.com/2021/02/24/difference-between-partof-and-bindsto-in-a-systemd-unit/)). And more keep on getting added, when some hole is noticed inbetween the other definitions.
+These option names rely on (IMO) made up distinctions between near-synonyms to convey their intent. Just figuring out the differences between those took a good few hours, and I guarantee that I can't 100% predict their behavior still ([I'm not alone](https://pychao.com/2021/02/24/difference-between-partof-and-bindsto-in-a-systemd-unit/)). And more keep on getting added, when some hole is noticed in between the other definitions.
 
 Then there's things like: if there's a `.device` in your dependency path (implicit in mount units!), and it gets removed (e.g. disk removed for a mount) [it'll cause a "stop" not a "failure"](https://github.com/systemd/systemd/issues/30204) so everything will stop and not be retried. This is similar to `ConditionZZZ` directives, which force a service into a stopped state rather than just delaying startup.
 
-There's a million directives with complex, subtle interactions, and there were a number of other things that kept biting me like no/limited JSON support making interop difficult, it was hard to figure out why processes were getting killed or restarted, commands would exit with code 0 even when invocations were wrong, commands would return non-0 codes when things were fine, etc.
+There are a million directives with complex, subtle interactions, and there were a number of other things that kept biting me like no/limited JSON support making interop difficult, it was hard to figure out why processes were getting killed or restarted, commands would exit with code 0 even when invocations were wrong, commands would return non-0 codes when things were fine, etc.
 
 I believe there's a simpler model for process management.
 
@@ -139,19 +137,19 @@ To even have a chance of getting users, I needed to figure out what the core fea
 
 - A standard for packaging
 
-  Many pieces of software come with reference SystemD unit definitions. This was huge for interoperability, and unfortunately this is purely a market share thing - I'm hopeful this will be surmountable if its otherwise very usable.
+  Many pieces of software come with reference SystemD unit definitions. This was huge for interoperability, and unfortunately this is purely a market share thing - I'm hopeful this will be surmountable if Puteron is otherwise very usable.
 
 - A standard for overrides
 
-  For system administrators, a standard method for customizing services and manage those overrides separate from the base system.
+  System administrators need a standard method for customizing services and manage those overrides independent from the base system so that upgrades don't fail to update files or overwrite customizations.
 
-- Avoiding misconfiguration with optional dependencies
+- Avoiding misconfiguration when there are optional dependencies
 
   If a service self-configures itself based on the observed environment (like, open sockets, or external processes, enumerating devices, etc) then if it's started too early it may be mis-configured. Specifying dependencies prevents such a service from starting until the environment is properly set up.
 
 - Dealing with diverse installation environments
 
-  Depending on the system, files may be in different locations, services might not exist (or others might exist in their place). Ideally, a single definition would be able to work without changes in a variety of environments by use of optional dependencies, various runtime checks, etc.
+  Depending on the system, files may be in different locations, services might not exist (or others might exist in their place). Ideally, a single definition would be able to work without changes in a variety of environments, various runtime checks, etc.
 
 - System mutation
 
@@ -165,4 +163,4 @@ To even have a chance of getting users, I needed to figure out what the core fea
 
   The dependency graph prevents services from starting when critical dependencies aren't on, avoiding a lot of error spam in the noise.
 
-I think Puteron has solutions for most of these, to some degree. Per the goal of having a limited scope, some of these may require additional scripting around processes. You can't do direct conversion of SystemD units to Puteron tasks, but I think most services could be run in Puteron without much hassle.
+I think Puteron has solutions for most of these, to some degree or minimal wrapper scripts. You can't do direct conversion of SystemD units to Puteron tasks, but I think most services could be run in Puteron without much hassle.

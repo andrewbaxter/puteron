@@ -1,5 +1,7 @@
 use {
     loga::{
+        ea,
+        DebugDisplay,
         ErrContext,
         ResultContext,
     },
@@ -66,10 +68,12 @@ pub(crate) async fn read<O: DeserializeOwned>(conn: &mut UnixStream) -> Result<O
 }
 
 pub(crate) async fn client_req<I: latest::RequestTrait>(req: I) -> Result<I::Response, loga::Error> {
+    let sock_path = ipc_path().context("No IPC path set; there is no default IPC path for non-root users")?;
     let mut conn =
         UnixSocket::new_stream()?
-            .connect(ipc_path().context("No IPC path set; there is no default IPC path for non-root users")?)
-            .await?;
+            .connect(&sock_path)
+            .await
+            .context_with("Error connecting to puteron IPC socket", ea!(path = sock_path.dbg_str()))?;
     write(&mut conn, &serde_json::to_vec(&Request::V1(latest::Request::from(req.into()))).unwrap()).await?;
     return Ok(read::<I::Response>(&mut conn).await?.context("Disconnected by remote host")?);
 }

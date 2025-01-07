@@ -29,7 +29,11 @@
         envArg = lib.mkOption {
           default = null;
           type = lib.types.nullOr (submodule {
-            clear = lib.mkOption {
+            keep_all = lib.mkOption {
+              default = null;
+              type = lib.types.nullOr lib.types.bool;
+            };
+            keep = lib.mkOption {
               default = null;
               type = lib.types.nullOr (lib.types.attrsOf lib.types.bool);
             };
@@ -183,24 +187,20 @@
             (builtins.toJSON tasks)
           ];
         };
+        demon = (pkgs.writeText "puteron-config" (builtins.toJSON (removeAttrsNull (builtins.listToAttrs (
+          [ ]
+          ++ (lib.lists.optional (config.puteron.environment != null) {
+            name = "environment";
+            value = config.puteron.environment;
+          })
+          ++ [{
+            name = "task_dirs";
+            value = [ taskDirs ];
+          }]
+        )))));
       in
       lib.concatStringsSep " " (
-        [
-          "${config.system.build.puteron_pkg}/bin/puteron"
-          "demon"
-          "run"
-          (pkgs.writeText "puteron-config" (builtins.toJSON (builtins.listToAttrs (
-            [ ]
-            ++ (lib.lists.optional (config.puteron.environment != null) {
-              name = "environment";
-              value = config.puteron.environment;
-            })
-            ++ [{
-              name = "task_dirs";
-              value = [ taskDirs ];
-            }]
-          ))))
-        ]
+        [ "${config.system.build.puteron_pkg}/bin/puteron" "demon" "run" "${demon}" ]
         ++ (lib.lists.optional config.puteron.debug "--debug")
       )
     );

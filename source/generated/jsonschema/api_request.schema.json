@@ -1,0 +1,755 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Request",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": [
+        "v1"
+      ],
+      "properties": {
+        "v1": {
+          "$ref": "#/definitions/Request"
+        }
+      },
+      "additionalProperties": false
+    }
+  ],
+  "definitions": {
+    "Command": {
+      "type": "object",
+      "required": [
+        "command"
+      ],
+      "properties": {
+        "command": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "environment": {
+          "default": {
+            "add": {},
+            "clean": false,
+            "keep": {}
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/Environment"
+            }
+          ]
+        },
+        "working_directory": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "DependencyType": {
+      "description": "All dependencies will prevent the dependent from starting until they've reached started state, and cause the dependent to stop when they leave started state. Additional behaviors are indicated in this struct.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "weak"
+          ]
+        },
+        {
+          "description": "Sets `transitive_on` in the dependency when the dependent is `on` (i.e. turns on deps that are off).",
+          "type": "string",
+          "enum": [
+            "strong"
+          ]
+        }
+      ]
+    },
+    "Duration": {
+      "type": "string",
+      "pattern": "(\\[0-9]+)([hms])"
+    },
+    "Environment": {
+      "type": "object",
+      "properties": {
+        "add": {
+          "description": "Add or override the following environment variables;",
+          "default": {},
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "clean": {
+          "description": "Don't inherit any environment variables from the demon environment.",
+          "default": false,
+          "type": "boolean"
+        },
+        "keep": {
+          "description": "A map of environment variables and a bool, whether inherit from the context's parent environment variable pool. The bool is required for allowing overrides when merging configs, normally all entries would be `true`.\n\nThis is ignored unless `clean` is `true`.",
+          "default": {},
+          "type": "object",
+          "additionalProperties": {
+            "type": "boolean"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "MinuteSecond": {
+      "type": "string",
+      "pattern": "[0-5]?[0-9](:[0-5][0-9])?"
+    },
+    "Month": {
+      "type": "string",
+      "format": "january|february|march|..."
+    },
+    "Request": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "task_add"
+          ],
+          "properties": {
+            "task_add": {
+              "$ref": "#/definitions/RequestAdd"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "task_delete"
+          ],
+          "properties": {
+            "task_delete": {
+              "$ref": "#/definitions/RequestTaskDelete"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "task_get_status"
+          ],
+          "properties": {
+            "task_get_status": {
+              "$ref": "#/definitions/RequestTaskGetStatus"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "task_get_spec"
+          ],
+          "properties": {
+            "task_get_spec": {
+              "$ref": "#/definitions/RequestTaskGetSpec"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "task_on"
+          ],
+          "properties": {
+            "task_on": {
+              "$ref": "#/definitions/RequestTaskOn"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "task_wait_started"
+          ],
+          "properties": {
+            "task_wait_started": {
+              "$ref": "#/definitions/RequestTaskWaitStarted"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "task_wait_stopped"
+          ],
+          "properties": {
+            "task_wait_stopped": {
+              "$ref": "#/definitions/RequestTaskWaitStopped"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "task_list_user_on"
+          ],
+          "properties": {
+            "task_list_user_on": {
+              "$ref": "#/definitions/RequestTaskListUserOn"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "task_list_upstream"
+          ],
+          "properties": {
+            "task_list_upstream": {
+              "$ref": "#/definitions/RequestTaskListUpstream"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "task_list_downstream"
+          ],
+          "properties": {
+            "task_list_downstream": {
+              "$ref": "#/definitions/RequestTaskListDownstream"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "demon_env"
+          ],
+          "properties": {
+            "demon_env": {
+              "$ref": "#/definitions/RequestDemonEnv"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "demon_spec_dirs"
+          ],
+          "properties": {
+            "demon_spec_dirs": {
+              "$ref": "#/definitions/RequestDemonSpecDirs"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "RequestAdd": {
+      "type": "object",
+      "required": [
+        "spec",
+        "task",
+        "unique"
+      ],
+      "properties": {
+        "spec": {
+          "$ref": "#/definitions/Task"
+        },
+        "task": {
+          "type": "string"
+        },
+        "unique": {
+          "description": "Error if task already exists.",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RequestDemonEnv": {
+      "type": "null"
+    },
+    "RequestDemonSpecDirs": {
+      "type": "object",
+      "additionalProperties": false
+    },
+    "RequestTaskDelete": {
+      "type": "string"
+    },
+    "RequestTaskGetSpec": {
+      "type": "string"
+    },
+    "RequestTaskGetStatus": {
+      "type": "string"
+    },
+    "RequestTaskListDownstream": {
+      "type": "string"
+    },
+    "RequestTaskListUpstream": {
+      "type": "string"
+    },
+    "RequestTaskListUserOn": {
+      "type": "null"
+    },
+    "RequestTaskOn": {
+      "type": "object",
+      "required": [
+        "on",
+        "task"
+      ],
+      "properties": {
+        "on": {
+          "type": "boolean"
+        },
+        "task": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RequestTaskWaitStarted": {
+      "type": "string"
+    },
+    "RequestTaskWaitStopped": {
+      "type": "string"
+    },
+    "Rule": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "period"
+          ],
+          "properties": {
+            "period": {
+              "$ref": "#/definitions/RulePeriod"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "hourly"
+          ],
+          "properties": {
+            "hourly": {
+              "$ref": "#/definitions/MinuteSecond"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "daily"
+          ],
+          "properties": {
+            "daily": {
+              "type": "string",
+              "format": "partial-date-time"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "weekly"
+          ],
+          "properties": {
+            "weekly": {
+              "$ref": "#/definitions/RuleWeekly"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "monthly"
+          ],
+          "properties": {
+            "monthly": {
+              "$ref": "#/definitions/RuleMonthly"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "yearly"
+          ],
+          "properties": {
+            "yearly": {
+              "$ref": "#/definitions/RuleYearly"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "RuleMonthly": {
+      "type": "object",
+      "required": [
+        "day",
+        "time"
+      ],
+      "properties": {
+        "day": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0.0
+        },
+        "time": {
+          "type": "string",
+          "format": "partial-date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RulePeriod": {
+      "type": "object",
+      "required": [
+        "period"
+      ],
+      "properties": {
+        "period": {
+          "$ref": "#/definitions/Duration"
+        },
+        "scattered": {
+          "description": "Start with a random delay up to the period size, to avoid synchronized restarts causing thundering herds.",
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RuleWeekly": {
+      "type": "object",
+      "required": [
+        "time",
+        "weekday"
+      ],
+      "properties": {
+        "time": {
+          "type": "string",
+          "format": "partial-date-time"
+        },
+        "weekday": {
+          "type": "string",
+          "enum": [
+            "Mon",
+            "Tue",
+            "Wed",
+            "Thu",
+            "Fri",
+            "Sat",
+            "Sun"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "RuleYearly": {
+      "type": "object",
+      "required": [
+        "day",
+        "month",
+        "time"
+      ],
+      "properties": {
+        "day": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0.0
+        },
+        "month": {
+          "$ref": "#/definitions/Month"
+        },
+        "time": {
+          "type": "string",
+          "format": "partial-date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ShortTaskStartedAction": {
+      "oneOf": [
+        {
+          "description": "Nothing happens, task continues to be considered on and started. This is the default if the task is not scheduled and a started action isn't specified.",
+          "type": "string",
+          "enum": [
+            "none"
+          ]
+        },
+        {
+          "description": "Set the user-on state to `false` once the task ends. This is the default if the task is scheduled and a started action isn't specified.",
+          "type": "string",
+          "enum": [
+            "turn_off"
+          ]
+        },
+        {
+          "description": "Delete the task once the task ends. It will no longer show up in output and will be considered off.",
+          "type": "string",
+          "enum": [
+            "delete"
+          ]
+        }
+      ]
+    },
+    "StartedCheck": {
+      "oneOf": [
+        {
+          "description": "Consider started when this tcp socket has a listener",
+          "type": "object",
+          "required": [
+            "tcp_socket"
+          ],
+          "properties": {
+            "tcp_socket": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "description": "Consider started when a file exists at the following path",
+          "type": "object",
+          "required": [
+            "path"
+          ],
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "Task": {
+      "oneOf": [
+        {
+          "description": "This is a task that has no internal state or process, etc, but can be used as a node in the graph for grouping other tasks (a.k.a. a target or loosely, a run-level).\n\nAn empty task starts immediately and never fails.",
+          "type": "object",
+          "required": [
+            "empty"
+          ],
+          "properties": {
+            "empty": {
+              "$ref": "#/definitions/TaskSpecEmpty"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "description": "A task that continues to run until stopped.\n\nLong tasks are considered started immediately, unless a `start_check` command is provided.",
+          "type": "object",
+          "required": [
+            "long"
+          ],
+          "properties": {
+            "long": {
+              "$ref": "#/definitions/TaskSpecLong"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "description": "A task that stops on its own (a.k.a one shot).\n\nShort tasks are considered started once they successfully exit.",
+          "type": "object",
+          "required": [
+            "short"
+          ],
+          "properties": {
+            "short": {
+              "$ref": "#/definitions/TaskSpecShort"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "description": "An external task is a task where the state is determined by an external process that communicates with puteron via API to communicate state changes.  Since it is externally managed, it can have no dependencies.\n\nWhen the task is set `user_on`, it is immediately also considered `started` (and vice-versa for `user_off`).",
+          "type": "string",
+          "enum": [
+            "external"
+          ]
+        }
+      ]
+    },
+    "TaskSpecEmpty": {
+      "type": "object",
+      "properties": {
+        "default_on": {
+          "default": false,
+          "type": "boolean"
+        },
+        "upstream": {
+          "default": {},
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/DependencyType"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "TaskSpecLong": {
+      "type": "object",
+      "required": [
+        "command"
+      ],
+      "properties": {
+        "command": {
+          "description": "Command to run",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Command"
+            }
+          ]
+        },
+        "default_on": {
+          "default": false,
+          "type": "boolean"
+        },
+        "restart_delay": {
+          "description": "How long to wait between restarts when the command fails. Defaults to 60s.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Duration"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "started_check": {
+          "description": "How to determine if command has started - otherwise immediately transition to started from starting.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/StartedCheck"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stop_timeout": {
+          "description": "How long to wait before force killing the process if it fails to stop. Defaults to 30s.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Duration"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "upstream": {
+          "default": {},
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/DependencyType"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "TaskSpecShort": {
+      "type": "object",
+      "required": [
+        "command"
+      ],
+      "properties": {
+        "command": {
+          "description": "Command to run",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Command"
+            }
+          ]
+        },
+        "default_on": {
+          "description": "Turn the task on as soon as it is loaded",
+          "default": false,
+          "type": "boolean"
+        },
+        "restart_delay": {
+          "description": "How long to wait between restarts when the command exits. Defaults to 60s.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Duration"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "schedule": {
+          "description": "Turn the task on on a schedule",
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Rule"
+          }
+        },
+        "started_action": {
+          "description": "What to do when the command succeeds",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ShortTaskStartedAction"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stop_timeout": {
+          "description": "How long to wait before force killing the process if it fails to stop. Defaults to 30s.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Duration"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "success_codes": {
+          "description": "Which exit codes are considered success.  By default, `0`.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "upstream": {
+          "default": {},
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/DependencyType"
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Result_of_Null_or_String",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": [
+        "Ok"
+      ],
+      "properties": {
+        "Ok": {
+          "type": "null"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "Err"
+      ],
+      "properties": {
+        "Err": {
+          "type": "string"
+        }
+      }
+    }
+  ]
+}

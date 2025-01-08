@@ -95,7 +95,7 @@ use {
 };
 
 #[derive(Aargvark)]
-pub(crate) struct DemonRunArgs {
+pub struct DemonRunArgs {
     config: AargvarkJson<Config>,
 }
 

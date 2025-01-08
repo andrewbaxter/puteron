@@ -32,3 +32,4 @@ slotmap = "1"
 chrono = "0.4"
 rand = "0.8"
 tokio-util = { version = "0.7", features = ["rt"] }
+schemars = "0.8"

@@ -17,14 +17,14 @@ mod task_util;
 
 #[derive(Aargvark)]
 #[vark(break_help)]
-pub(crate) enum DemonCommands {
+pub enum DemonCommands {
     /// Show the demon's effective environment variables
     Env,
     /// Run the demon in the foreground.
     Run(DemonRunArgs),
 }
 
-pub(crate) fn main(command: DemonCommands) -> Result<(), loga::Error> {
+pub fn main(command: DemonCommands) -> Result<(), loga::Error> {
     match command {
         DemonCommands::Env => {
             let rt =

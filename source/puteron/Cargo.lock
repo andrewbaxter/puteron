@@ -845,6 +845,7 @@ dependencies = [
  "puteron-lib",
  "rand",
  "rustix 0.38.42",
+ "schemars",
  "serde",
  "serde_json",
  "slotmap",

@@ -35,7 +35,7 @@ use {
 };
 
 #[derive(Aargvark)]
-pub(crate) struct LoadArgs {
+pub struct LoadArgs {
     /// ID to assign new task.
     task: TaskId,
     /// JSON task specification.
@@ -46,7 +46,7 @@ pub(crate) struct LoadArgs {
 
 #[derive(Aargvark)]
 #[vark(break_help)]
-pub(crate) enum TaskCommands {
+pub enum TaskCommands {
     /// Load or replace a task from a single config specified via arguments.
     Load(LoadArgs),
     /// Load or replace a task with the specified id from the demon task configuration
@@ -89,7 +89,7 @@ pub(crate) enum TaskCommands {
     ListDownstream(TaskId),
 }
 
-pub(crate) fn main(command: TaskCommands) -> Result<(), loga::Error> {
+pub fn main(command: TaskCommands) -> Result<(), loga::Error> {
     let rt = runtime::Builder::new_current_thread().enable_all().build().context("Error starting async runtime")?;
     return rt.block_on(async move {
         ta_return!((), loga::Error);

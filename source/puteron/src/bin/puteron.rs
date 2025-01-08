@@ -1,22 +1,17 @@
 use {
     aargvark::Aargvark,
-    demon::DemonCommands,
-    task::TaskCommands,
-    tracing::{
-        level_filters::LevelFilter,
+    puteron::{
+        demon,
+        task,
     },
+    tracing::level_filters::LevelFilter,
 };
-
-pub mod demon;
-pub mod task;
-pub mod ipc;
-pub mod spec;
 
 #[derive(Aargvark)]
 #[vark(break_help)]
 enum ArgCommand {
-    Task(TaskCommands),
-    Demon(DemonCommands),
+    Task(task::TaskCommands),
+    Demon(demon::DemonCommands),
 }
 
 #[derive(Aargvark)]

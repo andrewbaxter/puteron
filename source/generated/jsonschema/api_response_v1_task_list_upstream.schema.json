@@ -1,0 +1,78 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Result_of_Map_of_TaskDependencyStatus_or_String",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": [
+        "Ok"
+      ],
+      "properties": {
+        "Ok": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/TaskDependencyStatus"
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "Err"
+      ],
+      "properties": {
+        "Err": {
+          "type": "string"
+        }
+      }
+    }
+  ],
+  "definitions": {
+    "DependencyType": {
+      "description": "All dependencies will prevent the dependent from starting until they've reached started state, and cause the dependent to stop when they leave started state. Additional behaviors are indicated in this struct.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "weak"
+          ]
+        },
+        {
+          "description": "Sets `transitive_on` in the dependency when the dependent is `on` (i.e. turns on deps that are off).",
+          "type": "string",
+          "enum": [
+            "strong"
+          ]
+        }
+      ]
+    },
+    "TaskDependencyStatus": {
+      "type": "object",
+      "required": [
+        "dependency_type",
+        "on",
+        "related",
+        "started"
+      ],
+      "properties": {
+        "dependency_type": {
+          "$ref": "#/definitions/DependencyType"
+        },
+        "on": {
+          "type": "boolean"
+        },
+        "related": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/TaskDependencyStatus"
+          }
+        },
+        "started": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

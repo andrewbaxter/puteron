@@ -1,0 +1,192 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Result_of_TaskStatus_or_String",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": [
+        "Ok"
+      ],
+      "properties": {
+        "Ok": {
+          "$ref": "#/definitions/TaskStatus"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "Err"
+      ],
+      "properties": {
+        "Err": {
+          "type": "string"
+        }
+      }
+    }
+  ],
+  "definitions": {
+    "ProcState": {
+      "type": "string",
+      "enum": [
+        "stopped",
+        "starting",
+        "started",
+        "stopping"
+      ]
+    },
+    "TaskStatus": {
+      "type": "object",
+      "required": [
+        "direct_on",
+        "direct_on_at",
+        "specific",
+        "transitive_on",
+        "transitive_on_at"
+      ],
+      "properties": {
+        "direct_on": {
+          "type": "boolean"
+        },
+        "direct_on_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "specific": {
+          "$ref": "#/definitions/TaskStatusSpecific"
+        },
+        "transitive_on": {
+          "type": "boolean"
+        },
+        "transitive_on_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "TaskStatusSpecific": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "external"
+          ]
+        },
+        {
+          "type": "object",
+          "required": [
+            "empty"
+          ],
+          "properties": {
+            "empty": {
+              "$ref": "#/definitions/TaskStatusSpecificEmpty"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "long"
+          ],
+          "properties": {
+            "long": {
+              "$ref": "#/definitions/TaskStatusSpecificLong"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "short"
+          ],
+          "properties": {
+            "short": {
+              "$ref": "#/definitions/TaskStatusSpecificShort"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "TaskStatusSpecificEmpty": {
+      "type": "object",
+      "required": [
+        "started",
+        "started_at"
+      ],
+      "properties": {
+        "started": {
+          "type": "boolean"
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "TaskStatusSpecificLong": {
+      "type": "object",
+      "required": [
+        "restarts",
+        "state",
+        "state_at"
+      ],
+      "properties": {
+        "pid": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "restarts": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0.0
+        },
+        "state": {
+          "$ref": "#/definitions/ProcState"
+        },
+        "state_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "TaskStatusSpecificShort": {
+      "type": "object",
+      "required": [
+        "restarts",
+        "state",
+        "state_at"
+      ],
+      "properties": {
+        "pid": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "restarts": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0.0
+        },
+        "state": {
+          "$ref": "#/definitions/ProcState"
+        },
+        "state_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

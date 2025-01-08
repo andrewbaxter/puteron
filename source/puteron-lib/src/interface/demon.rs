@@ -26,7 +26,7 @@ pub struct Environment {
     pub add: HashMap<String, String>,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct Config {
     #[serde(default)]

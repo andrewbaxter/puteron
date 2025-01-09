@@ -1,0 +1,228 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Result_of_Array_of_RespScheduleEntry_or_String",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": [
+        "Ok"
+      ],
+      "properties": {
+        "Ok": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RespScheduleEntry"
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "Err"
+      ],
+      "properties": {
+        "Err": {
+          "type": "string"
+        }
+      }
+    }
+  ],
+  "definitions": {
+    "Duration": {
+      "type": "string",
+      "pattern": "(\\[0-9]+)([hms])"
+    },
+    "MinuteSecond": {
+      "type": "string",
+      "pattern": "[0-5]?[0-9](:[0-5][0-9])?"
+    },
+    "Month": {
+      "type": "string",
+      "format": "january|february|march|..."
+    },
+    "RespScheduleEntry": {
+      "type": "object",
+      "required": [
+        "at",
+        "rule",
+        "task"
+      ],
+      "properties": {
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "rule": {
+          "$ref": "#/definitions/Rule"
+        },
+        "task": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Rule": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "period"
+          ],
+          "properties": {
+            "period": {
+              "$ref": "#/definitions/RulePeriod"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "hourly"
+          ],
+          "properties": {
+            "hourly": {
+              "$ref": "#/definitions/MinuteSecond"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "daily"
+          ],
+          "properties": {
+            "daily": {
+              "type": "string",
+              "format": "partial-date-time"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "weekly"
+          ],
+          "properties": {
+            "weekly": {
+              "$ref": "#/definitions/RuleWeekly"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "monthly"
+          ],
+          "properties": {
+            "monthly": {
+              "$ref": "#/definitions/RuleMonthly"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "yearly"
+          ],
+          "properties": {
+            "yearly": {
+              "$ref": "#/definitions/RuleYearly"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "RuleMonthly": {
+      "type": "object",
+      "required": [
+        "day",
+        "time"
+      ],
+      "properties": {
+        "day": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0.0
+        },
+        "time": {
+          "type": "string",
+          "format": "partial-date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RulePeriod": {
+      "type": "object",
+      "required": [
+        "period"
+      ],
+      "properties": {
+        "period": {
+          "$ref": "#/definitions/Duration"
+        },
+        "scattered": {
+          "description": "Start with a random delay up to the period size, to avoid synchronized restarts causing thundering herds.",
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RuleWeekly": {
+      "type": "object",
+      "required": [
+        "time",
+        "weekday"
+      ],
+      "properties": {
+        "time": {
+          "type": "string",
+          "format": "partial-date-time"
+        },
+        "weekday": {
+          "type": "string",
+          "enum": [
+            "Mon",
+            "Tue",
+            "Wed",
+            "Thu",
+            "Fri",
+            "Sat",
+            "Sun"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "RuleYearly": {
+      "type": "object",
+      "required": [
+        "day",
+        "month",
+        "time"
+      ],
+      "properties": {
+        "day": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0.0
+        },
+        "month": {
+          "$ref": "#/definitions/Month"
+        },
+        "time": {
+          "type": "string",
+          "format": "partial-date-time"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

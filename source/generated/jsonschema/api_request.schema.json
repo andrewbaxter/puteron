@@ -244,6 +244,18 @@
         {
           "type": "object",
           "required": [
+            "demon_list_schedule"
+          ],
+          "properties": {
+            "demon_list_schedule": {
+              "$ref": "#/definitions/RequestDemonListSchedule"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
             "demon_spec_dirs"
           ],
           "properties": {
@@ -277,6 +289,9 @@
       "additionalProperties": false
     },
     "RequestDemonEnv": {
+      "type": "null"
+    },
+    "RequestDemonListSchedule": {
       "type": "null"
     },
     "RequestDemonSpecDirs": {

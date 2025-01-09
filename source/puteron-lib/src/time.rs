@@ -21,14 +21,14 @@ use {
 };
 
 // # Fixed duration
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SimpleDurationUnit {
     Second,
     Minute,
     Hour,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct SimpleDuration {
     pub count: u64,
     pub unit: SimpleDurationUnit,
@@ -102,7 +102,7 @@ impl JsonSchema for SimpleDuration {
 }
 
 // # Calendar relative
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct MinuteSecond {
     pub minute: u8,
     pub second: u8,

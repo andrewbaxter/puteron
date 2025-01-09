@@ -10,6 +10,7 @@ use {
     flowcontrol::ta_return,
     loga::{
         ea,
+        Log,
         ResultContext,
     },
     puteron_lib::interface::{
@@ -89,7 +90,7 @@ pub enum TaskCommands {
     ListDownstream(TaskId),
 }
 
-pub fn main(command: TaskCommands) -> Result<(), loga::Error> {
+pub fn main(log: &Log, command: TaskCommands) -> Result<(), loga::Error> {
     let rt = runtime::Builder::new_current_thread().enable_all().build().context("Error starting async runtime")?;
     return rt.block_on(async move {
         ta_return!((), loga::Error);
@@ -104,7 +105,7 @@ pub fn main(command: TaskCommands) -> Result<(), loga::Error> {
             TaskCommands::LoadStored(task_id) => {
                 let dirs = client_req(RequestDemonSpecDirs {}).await?.map_err(loga::err)?;
                 let spec =
-                    merge_specs(&dirs, Some(&task_id))?
+                    merge_specs(log, &dirs, Some(&task_id))?
                         .remove(&task_id)
                         .context_with("Found no specs for task", ea!(task = task_id))?;
                 client_req(RequestAdd {
@@ -116,7 +117,7 @@ pub fn main(command: TaskCommands) -> Result<(), loga::Error> {
             TaskCommands::PreviewStored(task_id) => {
                 let dirs = client_req(RequestDemonSpecDirs {}).await?.map_err(loga::err)?;
                 let spec =
-                    merge_specs(&dirs, Some(&task_id))?
+                    merge_specs(log, &dirs, Some(&task_id))?
                         .remove(&task_id)
                         .context_with("Found no specs for task", ea!(task = task_id))?;
                 println!("{}", serde_json::to_string_pretty(&spec).unwrap());

@@ -1,7 +1,9 @@
 use {
     loga::{
         ea,
+        DebugDisplay,
         ErrContext,
+        Log,
         ResultContext,
     },
     puteron_lib::interface,
@@ -14,10 +16,10 @@ use {
         io::ErrorKind,
         path::PathBuf,
     },
-    tracing::debug,
 };
 
 pub(crate) fn merge_specs(
+    log: &Log,
     dirs: &[PathBuf],
     filter: Option<&str>,
 ) -> Result<BTreeMap<String, interface::task::Task>, loga::Error> {
@@ -27,7 +29,7 @@ pub(crate) fn merge_specs(
             Ok(e) => e,
             Err(e) => {
                 if e.kind() == ErrorKind::NotFound {
-                    debug!(dir =? dir, "Task directory doesn't exist, skipping");
+                    log.log_with(loga::DEBUG, "Task directory doesn't exist, skipping", ea!(dir = dir.dbg_str()));
                     continue;
                 }
                 return Err(

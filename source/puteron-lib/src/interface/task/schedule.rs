@@ -15,7 +15,7 @@ use {
     },
 };
 
-#[derive(Serialize, Deserialize, JsonSchema, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone, PartialEq, Eq, Debug)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct RulePeriod {
     pub period: SimpleDuration,
@@ -25,14 +25,14 @@ pub struct RulePeriod {
     pub scattered: bool,
 }
 
-#[derive(Serialize, Deserialize, JsonSchema, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone, PartialEq, Eq, Debug)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct ScheduleHourly {
     // 0-23
     pub minute: usize,
 }
 
-#[derive(Serialize, Deserialize, JsonSchema, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone, PartialEq, Eq, Debug)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct RuleWeekly {
     // Lowercase, English (`monday`, `tuesday`, etc)
@@ -40,7 +40,7 @@ pub struct RuleWeekly {
     pub time: NaiveTime,
 }
 
-#[derive(Serialize, Deserialize, JsonSchema, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone, PartialEq, Eq, Debug)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct RuleMonthly {
     // Starting at 1, clamped to month day range
@@ -48,7 +48,7 @@ pub struct RuleMonthly {
     pub time: NaiveTime,
 }
 
-#[derive(Serialize, Deserialize, JsonSchema, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone, PartialEq, Eq, Debug)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct RuleYearly {
     pub month: SerdeMonth,
@@ -57,7 +57,7 @@ pub struct RuleYearly {
     pub time: NaiveTime,
 }
 
-#[derive(Serialize, Deserialize, JsonSchema, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone, PartialEq, Eq, Debug)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Rule {
     Period(RulePeriod),

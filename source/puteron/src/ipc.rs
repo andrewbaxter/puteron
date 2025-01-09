@@ -28,7 +28,7 @@ use {
 };
 
 pub(crate) fn ipc_path() -> Option<PathBuf> {
-    if let Ok(p) = env::var("PUTERIUM_IPC_SOCK") {
+    if let Ok(p) = env::var("PUTERON_IPC_SOCK") {
         return Some(PathBuf::from(p));
     }
     if let Ok(p) = env::var("XDG_RUNTIME_DIR") {

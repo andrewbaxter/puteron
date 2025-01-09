@@ -1,10 +1,13 @@
 use {
     aargvark::Aargvark,
+    loga::{
+        fatal,
+        Log,
+    },
     puteron::{
         demon,
         task,
     },
-    tracing::level_filters::LevelFilter,
 };
 
 #[derive(Aargvark)]
@@ -21,18 +24,22 @@ struct Args {
     debug: Option<()>,
 }
 
-fn main() -> Result<(), loga::Error> {
+fn main() {
     let args = aargvark::vark::<Args>();
-    tracing::subscriber::set_global_default(
-        tracing_subscriber::fmt::Subscriber::builder().with_max_level(if args.debug.is_some() {
-            LevelFilter::DEBUG
-        } else {
-            LevelFilter::INFO
-        }).finish(),
-    ).unwrap();
-    match args.command {
-        ArgCommand::Task(command) => task::main(command)?,
-        ArgCommand::Demon(command) => demon::main(command)?,
+    let log = Log::new_root(match args.debug.is_some() {
+        true => loga::DEBUG,
+        false => loga::INFO,
+    });
+    match (|| {
+        match args.command {
+            ArgCommand::Task(command) => task::main(&log, command)?,
+            ArgCommand::Demon(command) => demon::main(&log, command)?,
+        }
+        return Ok(());
+    })() {
+        Ok(_) => { },
+        Err(e) => {
+            fatal(e);
+        },
     }
-    return Ok(());
 }

@@ -2,6 +2,7 @@ use {
     crate::interface::{
         base::TaskId,
         task::{
+            schedule,
             DependencyType,
             Task,
         },
@@ -265,6 +266,29 @@ impl RequestTrait for RequestDemonEnv {
     type Response = Result<HashMap<String, String>, String>;
 }
 
+// Schedule
+#[derive(Serialize, Deserialize, Clone, JsonSchema)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct RequestDemonListSchedule;
+
+impl Into<Request> for RequestDemonListSchedule {
+    fn into(self) -> Request {
+        return Request::DemonListSchedule(self);
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, JsonSchema)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct RespScheduleEntry {
+    pub at: DateTime<Utc>,
+    pub task: TaskId,
+    pub rule: schedule::Rule,
+}
+
+impl RequestTrait for RequestDemonListSchedule {
+    type Response = Result<Vec<RespScheduleEntry>, String>;
+}
+
 // Spec dirs
 #[derive(Serialize, Deserialize, Clone, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
@@ -295,5 +319,6 @@ pub enum Request {
     TaskListUpstream(RequestTaskListUpstream),
     TaskListDownstream(RequestTaskListDownstream),
     DemonEnv(RequestDemonEnv),
+    DemonListSchedule(RequestDemonListSchedule),
     DemonSpecDirs(RequestDemonSpecDirs),
 }

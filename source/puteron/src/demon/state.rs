@@ -4,6 +4,7 @@ use {
         DateTime,
         Utc,
     },
+    loga::Log,
     puteron_lib::interface::{
         self,
         base::TaskId,
@@ -84,6 +85,7 @@ pub(crate) struct StateDynamic {
 }
 
 pub(crate) struct State {
+    pub(crate) log: Log,
     pub(crate) task_dirs: Vec<PathBuf>,
     pub(crate) env: HashMap<String, String>,
     pub(crate) dynamic: Mutex<StateDynamic>,

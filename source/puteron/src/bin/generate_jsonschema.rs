@@ -5,6 +5,7 @@ use {
         message::v1::{
             RequestAdd,
             RequestDemonEnv,
+            RequestDemonListSchedule,
             RequestDemonSpecDirs,
             RequestTaskDelete,
             RequestTaskGetSpec,
@@ -102,6 +103,12 @@ fn main() {
         root.join("api_response_v1_demon_env.schema.json"),
         serde_json::to_vec_pretty(
             &schema_for!(<RequestDemonEnv as interface::message::v1::RequestTrait>::Response),
+        ).unwrap(),
+    ).unwrap();
+    write(
+        root.join("api_response_v1_demon_list_schedule.schema.json"),
+        serde_json::to_vec_pretty(
+            &schema_for!(<RequestDemonListSchedule as interface::message::v1::RequestTrait>::Response),
         ).unwrap(),
     ).unwrap();
     write(

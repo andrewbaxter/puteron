@@ -43,12 +43,16 @@ use {
     loga::{
         ea,
         DebugDisplay,
+        ErrContext,
+        Log,
         ResultContext,
     },
     puteron_lib::interface::{
         self,
+        demon::Config,
         message::v1::{
             RequestTrait,
+            RespScheduleEntry,
             TaskDependencyStatus,
             TaskStatus,
         },
@@ -56,12 +60,13 @@ use {
             DependencyType,
             Task,
         },
-        demon::Config,
+    },
+    rustix::{
+        fd::AsFd,
+        fs::flock,
     },
     std::{
-        collections::{
-            HashMap,
-        },
+        collections::HashMap,
         env,
         future::Future,
         sync::{
@@ -70,7 +75,10 @@ use {
         },
     },
     tokio::{
-        fs::remove_file,
+        fs::{
+            remove_file,
+            File,
+        },
         net::{
             UnixListener,
             UnixStream,
@@ -88,10 +96,6 @@ use {
             Instant,
         },
     },
-    tracing::{
-        debug,
-        instrument,
-    },
 };
 
 #[derive(Aargvark)]
@@ -99,9 +103,9 @@ pub struct DemonRunArgs {
     config: AargvarkJson<Config>,
 }
 
-pub(crate) fn main(args: DemonRunArgs) -> Result<(), loga::Error> {
+pub(crate) fn main(log: &Log, args: DemonRunArgs) -> Result<(), loga::Error> {
     let config = args.config.value;
-    let mut specs = merge_specs(&config.task_dirs, None)?;
+    let mut specs = merge_specs(log, &config.task_dirs, None)?;
 
     // # Prep env
     let mut env = HashMap::new();
@@ -115,6 +119,7 @@ pub(crate) fn main(args: DemonRunArgs) -> Result<(), loga::Error> {
     // # Create state
     let notify_reschedule = Arc::new(Notify::new());
     let state = Arc::new(State {
+        log: log.clone(),
         task_dirs: config.task_dirs,
         env: env,
         dynamic: Mutex::new(StateDynamic {
@@ -210,7 +215,7 @@ pub(crate) fn main(args: DemonRunArgs) -> Result<(), loga::Error> {
                         user_on = false;
                     },
                 }
-                debug!(task = task.id, on = user_on, "Task initial state");
+                log.log_with(loga::DEBUG, "Reporting task initial state-", ea!(task = task.id, on = user_on));
                 if !user_on {
                     continue;
                 }
@@ -233,12 +238,32 @@ pub(crate) fn main(args: DemonRunArgs) -> Result<(), loga::Error> {
         fn task_off_all(state: &Arc<State>) {
             let state_dynamic = state.dynamic.lock().unwrap();
             for task_id in state_dynamic.tasks.keys() {
-                set_task_user_off(&state_dynamic, task_id);
+                set_task_user_off(state, &state_dynamic, task_id);
             }
         }
 
+        let mut cleanup = vec![];
         let message_socket;
         if let Some(ipc_path) = ipc::ipc_path() {
+            let lock_path = ipc_path.with_extension("lock");
+            let filelock =
+                File::options()
+                    .mode(0o660)
+                    .write(true)
+                    .create(true)
+                    .custom_flags(libc::O_CLOEXEC)
+                    .open(&lock_path)
+                    .await
+                    .context("Error opening IPC lock file")?;
+            flock(
+                filelock.as_fd(),
+                rustix::fs::FlockOperation::NonBlockingLockExclusive,
+            ).context(
+                "Error getting exclusive lock for ipc socket, is another instance using the same socket path?",
+            )?;
+            let _defer = defer::defer(|| {
+                _ = remove_file(&lock_path);
+            });
             match remove_file(&ipc_path).await {
                 Ok(_) => { },
                 Err(e) => match e.kind() {
@@ -250,7 +275,10 @@ pub(crate) fn main(args: DemonRunArgs) -> Result<(), loga::Error> {
                     },
                 },
             }
-            message_socket = Some(UnixListener::bind(ipc_path).context("Error creating control socket")?);
+            message_socket = Some(UnixListener::bind(&ipc_path).context("Error creating control socket")?);
+            cleanup.push(defer::defer(move || {
+                _ = remove_file(&ipc_path);
+            }));
         } else {
             message_socket = None;
         }
@@ -260,25 +288,25 @@ pub(crate) fn main(args: DemonRunArgs) -> Result<(), loga::Error> {
         loop {
             select!{
                 _ =& mut sigint => {
-                    debug!("Got sigint, shutting down.");
+                    log.log(loga::DEBUG, "Got SIGINT, shutting down.");
                     task_off_all(&state);
                     break;
                 },
                 _ =& mut sigterm => {
-                    debug!("Got sigterm, shutting down.");
+                    log.log(loga::DEBUG, "Got SIGTERM, shutting down.");
                     task_off_all(&state);
                     break;
                 }
                 accepted = message_socket.as_ref().unwrap().accept(),
                 if message_socket.is_some() => {
-                    let (stream, peer) = match accepted {
+                    let (stream, _peer) = match accepted {
                         Ok((stream, peer)) => (stream, peer),
                         Err(e) => {
-                            debug!(err = e.to_string(), "Error accepting connection");
+                            log.log_err(loga::DEBUG, e.context("Error accepting connection"));
                             continue;
                         },
                     };
-                    spawn(handle_ipc(state.clone(), peer, stream));
+                    spawn(handle_ipc(state.clone(), stream));
                 },
                 _ = notify_reschedule.notified() => {
                     let mut state_dynamic = state.dynamic.lock().unwrap();
@@ -287,7 +315,11 @@ pub(crate) fn main(args: DemonRunArgs) -> Result<(), loga::Error> {
                 },
                 _ = sleep_until(schedule_delay) => {
                     let mut state_dynamic = state.dynamic.lock().unwrap();
-                    debug!(task = schedule_next.0, "Timer triggered for scheduled task, turning on");
+                    log.log_with(
+                        loga::DEBUG,
+                        "Timer triggered for scheduled task, turning on.",
+                        ea!(task = schedule_next.0, schedule = schedule_next.1.dbg_str()),
+                    );
                     set_task_user_on(&state, &mut state_dynamic, &schedule_next.0);
                     state_dynamic
                         .schedule
@@ -307,8 +339,8 @@ pub(crate) fn main(args: DemonRunArgs) -> Result<(), loga::Error> {
     return Ok(());
 }
 
-#[instrument(skip_all, fields(peer =? peer))]
-async fn handle_ipc(state: Arc<State>, peer: tokio::net::unix::SocketAddr, mut conn: UnixStream) {
+async fn handle_ipc(state: Arc<State>, mut conn: UnixStream) {
+    let log = state.log.fork(ea!(sys = "ipc"));
     loop {
         let message = match ipc::read::<interface::message::Request>(&mut conn).await {
             Ok(Some(message)) => message,
@@ -316,12 +348,13 @@ async fn handle_ipc(state: Arc<State>, peer: tokio::net::unix::SocketAddr, mut c
                 return;
             },
             Err(e) => {
-                debug!(peer =? peer, error =? e, "Error reading message from connection");
+                log.log_err(loga::DEBUG, e.context("Error reading message from connection"));
                 return;
             },
         };
         match {
             let state = state.clone();
+            let log = log.clone();
             async move {
                 ta_return!(Vec < u8 >, loga::Error);
 
@@ -474,7 +507,7 @@ async fn handle_ipc(state: Arc<State>, peer: tokio::net::unix::SocketAddr, mut c
                                 set_task_user_on(&state, &mut state_dynamic, &m.task);
                                 return Ok(());
                             } else {
-                                set_task_user_off(&mut state_dynamic, &m.task);
+                                set_task_user_off(&state, &mut state_dynamic, &m.task);
                                 return Ok(());
                             }
                         }).await,
@@ -611,6 +644,36 @@ async fn handle_ipc(state: Arc<State>, peer: tokio::net::unix::SocketAddr, mut c
                             }
                             return Ok(root.unwrap());
                         }).await,
+                        interface::message::v1::Request::DemonListSchedule(m) => return handle(m, |_m| async {
+                            let state_dynamic = state.dynamic.lock().unwrap();
+                            let instant_now = Instant::now();
+                            let now = Utc::now();
+                            let mut out = vec![];
+                            out.reserve(state_dynamic.schedule.len());
+                            for (at, entries) in &state_dynamic.schedule {
+                                for entry in entries {
+                                    let at_secs: i64 = match at.duration_since(instant_now).as_secs().try_into() {
+                                        Ok(s) => s,
+                                        Err(e) => {
+                                            log.log_err(
+                                                loga::WARN,
+                                                e.context_with(
+                                                    "Schedule entry out of i64 range for chrono IPC response",
+                                                    ea!(task = entry.0, rule = entry.1.dbg_str()),
+                                                ),
+                                            );
+                                            continue;
+                                        },
+                                    };
+                                    out.push(RespScheduleEntry {
+                                        at: now + chrono::Duration::seconds(at_secs),
+                                        task: entry.0.clone(),
+                                        rule: entry.1.clone(),
+                                    });
+                                }
+                            }
+                            return Ok(out);
+                        }).await,
                         interface::message::v1::Request::DemonEnv(m) => return handle(m, |_m| async {
                             return Ok(state.env.clone());
                         }).await,
@@ -625,12 +688,12 @@ async fn handle_ipc(state: Arc<State>, peer: tokio::net::unix::SocketAddr, mut c
                 match ipc::write(&mut conn, &body).await {
                     Ok(_) => { },
                     Err(e) => {
-                        debug!(err = e.to_string(), "Error writing response");
+                        log.log_err(loga::DEBUG, e.context("Error writing response"));
                     },
                 }
             },
             Err(e) => {
-                debug!(err = e.to_string(), "Error handling message");
+                log.log_err(loga::DEBUG, e.context("Error handling message"));
             },
         }
     }

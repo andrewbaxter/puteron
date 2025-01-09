@@ -14,7 +14,13 @@ use {
     },
     chrono::Utc,
     flowcontrol::ta_return,
-    loga::ResultContext,
+    loga::{
+        ea,
+        DebugDisplay,
+        ErrContext,
+        Log,
+        ResultContext,
+    },
     puteron_lib::{
         interface::{
             self,
@@ -32,9 +38,7 @@ use {
         termios::Pid,
     },
     std::{
-        collections::{
-            HashSet,
-        },
+        collections::HashSet,
         future::Future,
         pin::Pin,
         process::Stdio,
@@ -64,32 +68,23 @@ use {
         wrappers::LinesStream,
         StreamExt,
     },
-    tracing::{
-        debug,
-        info_span,
-        warn,
-        Instrument,
-    },
 };
 
-pub(crate) fn log_starting(task_id: &TaskId) {
+pub(crate) fn log_starting(state: &State, task_id: &TaskId) {
     //. debug!(task = task_id, "State change: starting");
-    eprintln!("[{}] State change: starting", task_id);
+    state.log.log_with(loga::DEBUG, "State change: starting (0)", ea!(task = task_id));
 }
 
-pub(crate) fn log_started(task_id: &TaskId) {
-    //. debug!(task = task_id, "State change: started");
-    eprintln!("[{}] State change: started", task_id);
+pub(crate) fn log_started(state: &State, task_id: &TaskId) {
+    state.log.log_with(loga::DEBUG, "State change: started (1)", ea!(task = task_id));
 }
 
-pub(crate) fn log_stopping(task_id: &TaskId) {
-    //. debug!(task = task_id, "State change: stopping");
-    eprintln!("[{}] State change: stopping", task_id);
+pub(crate) fn log_stopping(state: &State, task_id: &TaskId) {
+    state.log.log_with(loga::DEBUG, "State change: stopping (2)", ea!(task = task_id));
 }
 
-pub(crate) fn log_stopped(task_id: &TaskId) {
-    //. debug!(task = task_id, "State change: stopped");
-    eprintln!("[{}] State change: stopped", task_id);
+pub(crate) fn log_stopped(state: &State, task_id: &TaskId) {
+    state.log.log_with(loga::DEBUG, "State change: stopped (3)", ea!(task = task_id));
 }
 
 pub(crate) fn task_on(t: &TaskState_) -> bool {
@@ -150,7 +145,7 @@ pub(crate) fn all_downstream_tasks_stopped(state_dynamic: &StateDynamic, task: &
 
 /// After state change
 fn on_started(state: &Arc<State>, state_dynamic: &StateDynamic, task_id: &TaskId) {
-    log_started(task_id);
+    log_started(state, task_id);
     propagate_start_downstream(state, state_dynamic, task_id);
     let task = get_task(state_dynamic, task_id);
     for waiter in task.stopped_waiters.borrow_mut().split_off(0) {
@@ -162,9 +157,9 @@ fn on_started(state: &Arc<State>, state_dynamic: &StateDynamic, task_id: &TaskId
 }
 
 /// After state change
-pub(crate) fn on_stopped(state_dynamic: &StateDynamic, task_id: &TaskId) {
-    log_stopped(task_id);
-    propagate_stop_upstream(state_dynamic, task_id);
+pub(crate) fn on_stopped(state: &State, state_dynamic: &StateDynamic, task_id: &TaskId) {
+    log_stopped(state, task_id);
+    propagate_stop_upstream(state, state_dynamic, task_id);
     let task = get_task(state_dynamic, task_id);
     for waiter in task.stopped_waiters.borrow_mut().split_off(0) {
         _ = waiter.send(true);
@@ -223,7 +218,8 @@ pub(crate) fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, ta
         for (k, v) in &spec.environment.add {
             command.env(k, v);
         }
-        debug!(command =? command, "Spawning task process");
+        let log = state.log.fork(ea!(command = command.dbg_str()));
+        log.log(loga::DEBUG, "Spawning task process");
 
         // Stdout/err -> syslog 1
         command.stderr(Stdio::piped());
@@ -258,7 +254,7 @@ pub(crate) fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, ta
                         Ok(_) => (),
                         // Syslog restarting? or something
                         Err(e) => {
-                            warn!(err = e.to_string(), "Error forwarding child output line");
+                            log.log_err(loga::WARN, e.context("Error forwarding child output line"));
                         },
                     };
                 }
@@ -269,55 +265,57 @@ pub(crate) fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, ta
     }
 
     async fn gentle_stop_proc(
+        log: &Log,
         pid: Pid,
         mut child: Child,
         logger: LoggerRetFuture,
         stop_timeout: Option<SimpleDuration>,
     ) -> Result<(), loga::Error> {
         if let Err(e) = rustix::process::kill_process(pid, Signal::Term) {
-            warn!(err = e.to_string(), "Error sending TERM to child");
+            log.log_err(loga::WARN, e.context("Error sending SIGTERM to child"));
         }
         select!{
             r = child.wait() => {
                 let mut logger = logger.await?;
                 if let Err(e) = logger.info(format!("Process ended with status: {:?}", r)) {
-                    warn!(err = e.to_string(), "Error sending message to syslog");
+                    log.log_err(loga::WARN, e.context("Error sending message to syslog"));
                 }
             },
             _ = sleep(stop_timeout.map(|x| x.into()).unwrap_or(Duration::from_secs(30))) => {
                 if let Err(e) = rustix::process::kill_process(pid, Signal::Kill) {
-                    warn!(err = e.to_string(), "Error sending KILL to child");
+                    log.log_err(loga::WARN, e.context("Error sending SIGKILL to child"));
                 }
                 let mut logger = logger.await?;
                 if let Err(e) = logger.info(format!("Sent KILL: timeout after TERM")) {
-                    warn!(err = e.to_string(), "Error sending message to syslog");
+                    log.log_err(loga::WARN, e.context("Error sending message to syslog"));
                 }
             }
         }
         return Ok(());
     }
 
-    fn on_stopping(state_dynamic: &StateDynamic, task_id: &TaskId) {
-        log_stopping(task_id);
+    fn on_stopping(state: &State, state_dynamic: &StateDynamic, task_id: &TaskId) {
+        log_stopping(state, task_id);
 
         // Stop all downstream immediately
         let mut frontier = vec![];
         frontier.extend(get_task(state_dynamic, task_id).downstream.borrow().keys().cloned());
         while let Some(upstream_id) = frontier.pop() {
             let upstream_task = get_task(state_dynamic, &upstream_id);
-            do_stop_task(state_dynamic, &upstream_task);
+            do_stop_task(state, state_dynamic, &upstream_task);
             frontier.extend(upstream_task.downstream.borrow().keys().cloned());
         }
     }
 
     /// After state changes
-    fn on_starting(task_id: &TaskId) {
-        log_starting(task_id);
+    fn on_starting(state: &State, task_id: &TaskId) {
+        log_starting(state, task_id);
     }
 
+    let log = state.log.fork(ea!(task = task.id));
     match &task.specific {
         TaskStateSpecific::Empty(s) => {
-            on_starting(&task.id);
+            on_starting(state, &task.id);
             s.started.set((true, Utc::now()));
             on_started(state, state_dynamic, &task.id);
             return true;
@@ -337,13 +335,14 @@ pub(crate) fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, ta
                 let spec = s.spec.clone();
                 let task_id = task.id.clone();
                 let state = state.clone();
+                let log = log.clone();
                 async move {
                     let restart_delay = Duration::from(spec.restart_delay.unwrap_or(SimpleDuration {
                         count: 1,
                         unit: SimpleDurationUnit::Minute,
                     }).into());
                     loop {
-                        on_starting(&task_id);
+                        on_starting(&state, &task_id);
                         match async {
                             ta_return!(bool, loga::Error);
 
@@ -415,11 +414,11 @@ pub(crate) fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, ta
                                             panic!();
                                         };
                                         specific.state.set((ProcState::Stopping, Utc::now()));
-                                        on_stopping(&state_dynamic, &task_id);
+                                        on_stopping(&state, &state_dynamic, &task_id);
                                     }
 
                                     // Signal stop
-                                    gentle_stop_proc(pid, child, logger, spec.stop_timeout).await?;
+                                    gentle_stop_proc(&log, pid, child, logger, spec.stop_timeout).await?;
 
                                     // Mark as stopped
                                     {
@@ -430,20 +429,20 @@ pub(crate) fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, ta
                                         };
                                         specific.state.set((ProcState::Stopped, Utc::now()));
                                         specific.pid.set(None);
-                                        on_stopped(&state_dynamic, &task_id);
+                                        on_stopped(&state, &state_dynamic, &task_id);
                                     }
                                     return Ok(true);
                                 },
                                 r = child.wait() => {
                                     let mut logger = logger.await?;
                                     if let Err(e) = logger.info(format!("Process ended with status: {:?}", r)) {
-                                        warn!(err = e.to_string(), "Error sending message to syslog");
+                                        log.log_err(loga::WARN, e.context("Error sending message to syslog"));
                                     }
                                     {
                                         let state_dynamic = state.dynamic.lock().unwrap();
 
                                         // Move through stopping
-                                        on_stopping(&state_dynamic, &task_id);
+                                        on_stopping(&state, &state_dynamic, &task_id);
 
                                         // Mark as starting + do state updates
                                         let task = get_task(&state_dynamic, &task_id);
@@ -462,7 +461,7 @@ pub(crate) fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, ta
                                 }
                             },
                             Err(e) => {
-                                warn!(err = e.to_string(), "Long process failed with error");
+                                log.log_err(loga::WARN, e.context("Long task process failed with error"));
                             },
                         }
                         select!{
@@ -477,14 +476,14 @@ pub(crate) fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, ta
                                             panic!();
                                         };
                                     specific.state.set((ProcState::Stopped, Utc::now()));
-                                    on_stopped(&state_dynamic, &task_id);
+                                    on_stopped(&state, &state_dynamic, &task_id);
                                 }
                                 break;
                             }
                         }
                     }
                 }
-            }.instrument(info_span!("task_long", task_id = task.id)));
+            });
             return false;
         },
         TaskStateSpecific::Short(s) => {
@@ -502,6 +501,7 @@ pub(crate) fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, ta
                 let spec = s.spec.clone();
                 let task_id = task.id.clone();
                 let state = state.clone();
+                let log = log.clone();
                 async move {
                     let restart_delay = Duration::from(spec.restart_delay.unwrap_or(SimpleDuration {
                         count: 1,
@@ -513,7 +513,7 @@ pub(crate) fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, ta
                         success_codes.insert(0);
                     }
                     loop {
-                        on_starting(&task_id);
+                        on_starting(&state, &task_id);
                         match async {
                             ta_return!(bool, loga::Error);
                             let (mut child, pid, logger) = spawn_proc(&state, &task_id, &spec.command)?;
@@ -559,11 +559,11 @@ pub(crate) fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, ta
                                                         interface::task::ShortTaskStartedAction::Delete => {
                                                             task.user_on.set((false, Utc::now()));
                                                             propagate_transitive_off(&state_dynamic, &task_id);
-                                                            log_started(&task_id);
-                                                            log_stopping(&task_id);
+                                                            log_started(&state, &task_id);
+                                                            log_stopping(&state, &task_id);
                                                             specific.state.set((ProcState::Stopped, Utc::now()));
                                                             specific.pid.set(None);
-                                                            on_stopped(&state_dynamic, &task_id);
+                                                            on_stopped(&state, &state_dynamic, &task_id);
                                                             if started_action ==
                                                                 interface::task::ShortTaskStartedAction::Delete {
                                                                 delete_task(&mut state_dynamic, &task_id);
@@ -576,7 +576,10 @@ pub(crate) fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, ta
                                                 let mut logger = logger.await?;
                                                 if let Err(e) =
                                                     logger.info(format!("Process ended with result: {:?}", r)) {
-                                                    warn!(err = e.to_string(), "Error sending message to syslog");
+                                                    log.log_err(
+                                                        loga::WARN,
+                                                        e.context("Error sending message to syslog"),
+                                                    );
                                                 }
                                                 {
                                                     let state_dynamic = state.dynamic.lock().unwrap();
@@ -586,14 +589,14 @@ pub(crate) fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, ta
                                                     };
 
                                                     // Stopping
-                                                    on_stopping(&state_dynamic, &task_id);
+                                                    on_stopping(&state, &state_dynamic, &task_id);
 
                                                     // Move back to starting
                                                     specific.state.set((ProcState::Starting, Utc::now()));
                                                     specific
                                                         .failed_start_count
                                                         .set(specific.failed_start_count.get() + 1);
-                                                    on_starting(&task_id);
+                                                    on_starting(&state, &task_id);
                                                 }
                                                 return Ok(false);
                                             }
@@ -602,7 +605,10 @@ pub(crate) fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, ta
                                             let mut logger = logger.await?;
                                             if let Err(e) =
                                                 logger.info(format!("Process ended with unknown result: {:?}", e)) {
-                                                warn!(err = e.to_string(), "Error sending message to syslog");
+                                                log.log_err(
+                                                    loga::WARN,
+                                                    e.context("Error sending message to syslog"),
+                                                );
                                             };
 
                                             // Keep as `starting`
@@ -619,11 +625,11 @@ pub(crate) fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, ta
                                                 panic!();
                                             };
                                         specific.state.set((ProcState::Stopping, Utc::now()));
-                                        on_stopping(&state_dynamic, &task_id);
+                                        on_stopping(&state, &state_dynamic, &task_id);
                                     }
 
                                     // Signal stop
-                                    gentle_stop_proc(pid, child, logger, spec.stop_timeout).await?;
+                                    gentle_stop_proc(&log, pid, child, logger, spec.stop_timeout).await?;
 
                                     // Mark as stopped
                                     {
@@ -634,7 +640,7 @@ pub(crate) fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, ta
                                             };
                                         specific.state.set((ProcState::Stopped, Utc::now()));
                                         specific.pid.set(None);
-                                        on_stopped(&state_dynamic, &task_id);
+                                        on_stopped(&state, &state_dynamic, &task_id);
                                         if let Some(started_action) = &specific.spec.started_action {
                                             match started_action {
                                                 interface::task::ShortTaskStartedAction::None => { },
@@ -655,7 +661,7 @@ pub(crate) fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, ta
                                 }
                             },
                             Err(e) => {
-                                warn!(err = e.to_string(), "Long process failed with error");
+                                log.log_err(loga::WARN, e.context("Long process failed with error"));
                             },
                         }
                         select!{
@@ -670,7 +676,7 @@ pub(crate) fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, ta
                                         panic!();
                                     };
                                     specific.state.set((ProcState::Stopped, Utc::now()));
-                                    on_stopped(&state_dynamic, &task_id);
+                                    on_stopped(&state, &state_dynamic, &task_id);
                                     if let Some(started_action) = &specific.spec.started_action {
                                         match started_action {
                                             interface::task::ShortTaskStartedAction::None => { },
@@ -686,7 +692,7 @@ pub(crate) fn do_start_task(state: &Arc<State>, state_dynamic: &StateDynamic, ta
                         }
                     }
                 }
-            }.instrument(info_span!("task_short", task_id = task.id)));
+            });
             return false;
         },
         TaskStateSpecific::External => unreachable!(),
@@ -773,7 +779,7 @@ pub(crate) fn can_stop_task(task: &TaskState_) -> bool {
 }
 
 /// Return true if task is finished stopping (can continue with upstream).
-pub(crate) fn do_stop_task(state_dynamic: &StateDynamic, task: &TaskState_) -> bool {
+pub(crate) fn do_stop_task(state: &State, state_dynamic: &StateDynamic, task: &TaskState_) -> bool {
     if !all_downstream_tasks_stopped(state_dynamic, &task) {
         return false;
     }
@@ -782,9 +788,9 @@ pub(crate) fn do_stop_task(state_dynamic: &StateDynamic, task: &TaskState_) -> b
     }
     match &task.specific {
         TaskStateSpecific::Empty(specific) => {
-            log_stopping(&task.id);
+            log_stopping(&state, &task.id);
             specific.started.set((false, Utc::now()));
-            on_stopped(state_dynamic, &task.id);
+            on_stopped(&state, state_dynamic, &task.id);
             return true;
         },
         TaskStateSpecific::Long(specific) => {
@@ -856,7 +862,7 @@ pub(crate) fn propagate_transitive_off(state_dynamic: &StateDynamic, task_id: &T
     }
 }
 
-pub(crate) fn set_task_user_off(state_dynamic: &StateDynamic, task_id: &TaskId) {
+pub(crate) fn set_task_user_off(state: &State, state_dynamic: &StateDynamic, task_id: &TaskId) {
     // Update on flags and check if the effective `on` state has changed
     {
         let task = get_task(state_dynamic, &task_id);
@@ -905,7 +911,7 @@ pub(crate) fn set_task_user_off(state_dynamic: &StateDynamic, task_id: &TaskId) 
                 let all_downstream_stopped = all_downstream_stopped_stack.pop().unwrap();
                 let parent_all_downstream_stopped = all_downstream_stopped_stack.last_mut().unwrap();
                 if all_downstream_stopped {
-                    if !do_stop_task(state_dynamic, &downstream_task) {
+                    if !do_stop_task(state, state_dynamic, &downstream_task) {
                         *parent_all_downstream_stopped = false;
                     }
                 } else {
@@ -918,7 +924,7 @@ pub(crate) fn set_task_user_off(state_dynamic: &StateDynamic, task_id: &TaskId) 
 
     // Stop upstream if this is already stopped
     if stopped {
-        propagate_stop_upstream(state_dynamic, task_id);
+        propagate_stop_upstream(state, state_dynamic, task_id);
     }
 }
 
@@ -945,7 +951,7 @@ pub(crate) fn propagate_start_downstream(state: &Arc<State>, state_dynamic: &Sta
 
 // When a task stops, stop the next upstream tasks that were started as
 // dependencies
-pub(crate) fn propagate_stop_upstream(state_dynamic: &StateDynamic, task_id: &TaskId) {
+pub(crate) fn propagate_stop_upstream(state: &State, state_dynamic: &StateDynamic, task_id: &TaskId) {
     let mut frontier = vec![];
 
     fn push_upstream(frontier: &mut Vec<TaskId>, task: &TaskState_) {
@@ -968,7 +974,7 @@ pub(crate) fn propagate_stop_upstream(state_dynamic: &StateDynamic, task_id: &Ta
         if task_on(upstream_task) {
             continue;
         }
-        if !do_stop_task(state_dynamic, &upstream_task) {
+        if !do_stop_task(&state, state_dynamic, &upstream_task) {
             continue;
         }
         push_upstream(&mut frontier, &upstream_task);

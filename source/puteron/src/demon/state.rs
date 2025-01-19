@@ -1,5 +1,8 @@
 use {
-    super::schedule::ScheduleDynamic,
+    super::schedule::{
+        ScheduleDynamic,
+        ScheduleRule,
+    },
     chrono::{
         DateTime,
         Utc,
@@ -27,9 +30,12 @@ use {
             Mutex,
         },
     },
-    tokio::sync::{
-        oneshot,
-        Notify,
+    tokio::{
+        sync::{
+            oneshot,
+            Notify,
+        },
+        time::Instant,
     },
     tokio_util::task::TaskTracker,
 };
@@ -80,6 +86,8 @@ pub(crate) struct StateDynamic {
     pub(crate) task_alloc: SlotMap<TaskState, TaskState_>,
     // Downstream tasks are guaranteed to exist. Upstream tasks may or may not exist.
     pub(crate) tasks: HashMap<TaskId, TaskState>,
+    // For cli command only, stores the current rule being waited on
+    pub(crate) schedule_top: Option<(Instant, ScheduleRule)>,
     pub(crate) schedule: ScheduleDynamic,
     pub(crate) notify_reschedule: Arc<Notify>,
 }

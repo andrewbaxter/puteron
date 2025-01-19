@@ -125,6 +125,7 @@ pub(crate) fn main(log: &Log, args: DemonRunArgs) -> Result<(), loga::Error> {
         dynamic: Mutex::new(StateDynamic {
             task_alloc: Default::default(),
             tasks: Default::default(),
+            schedule_top: Default::default(),
             schedule: Default::default(),
             notify_reschedule: notify_reschedule.clone(),
         }),
@@ -649,7 +650,28 @@ async fn handle_ipc(state: Arc<State>, mut conn: UnixStream) {
                             let instant_now = Instant::now();
                             let now = Utc::now();
                             let mut out = vec![];
-                            out.reserve(state_dynamic.schedule.len());
+                            out.reserve(state_dynamic.schedule.len() + 1);
+                            #[allow(for_loops_over_fallibles)]
+                            for (at, entry) in &state_dynamic.schedule_top {
+                                let at_secs: i64 = match at.duration_since(instant_now).as_secs().try_into() {
+                                    Ok(s) => s,
+                                    Err(e) => {
+                                        log.log_err(
+                                            loga::WARN,
+                                            e.context_with(
+                                                "Schedule entry out of i64 range for chrono IPC response",
+                                                ea!(task = entry.0, rule = entry.1.dbg_str()),
+                                            ),
+                                        );
+                                        continue;
+                                    },
+                                };
+                                out.push(RespScheduleEntry {
+                                    at: now + chrono::Duration::seconds(at_secs),
+                                    task: entry.0.clone(),
+                                    rule: entry.1.clone(),
+                                });
+                            }
                             for (at, entries) in &state_dynamic.schedule {
                                 for entry in entries {
                                     let at_secs: i64 = match at.duration_since(instant_now).as_secs().try_into() {

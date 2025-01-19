@@ -121,5 +121,6 @@ pub(crate) fn pop_schedule(state_dynamic: &mut StateDynamic) -> (Instant, Schedu
     if next_tasks.is_empty() {
         next_entry.remove();
     }
+    state_dynamic.schedule_top = Some((instant, spec.clone()));
     return (instant, spec);
 }

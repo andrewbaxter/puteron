@@ -15,7 +15,7 @@ use {
         task_util::{
             get_task,
             maybe_get_task,
-            upstream,
+            walk_task_upstream,
         },
     },
     chrono::Utc,
@@ -167,7 +167,7 @@ pub(crate) fn delete_task(state_dynamic: &mut StateDynamic, task_id: &TaskId) {
     let task = state_dynamic.task_alloc.remove(task).unwrap();
 
     // Remove downstream entries
-    upstream(&task, |upstream| {
+    walk_task_upstream(&task, |upstream| {
         for (upstream_id, _) in upstream {
             let upstream = get_task(&state_dynamic, upstream_id);
             let mut downstream = upstream.downstream.borrow_mut();

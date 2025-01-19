@@ -9,7 +9,7 @@ use {
             build_task,
             validate_new_task,
         },
-        task_util::upstream,
+        task_util::walk_task_upstream,
     },
     crate::{
         demon::{
@@ -19,16 +19,16 @@ use {
                 populate_schedule,
             },
             task_create_delete::delete_task,
-            task_state::{
+            task_execute::{
                 set_task_user_off,
                 set_task_user_on,
-                task_on,
-                task_started,
-                task_stopped,
             },
             task_util::{
                 get_task,
                 maybe_get_task,
+                is_task_on,
+                is_task_started,
+                is_task_stopped,
             },
         },
         ipc,
@@ -199,8 +199,8 @@ pub(crate) fn main(log: &Log, args: DemonRunArgs) -> Result<(), loga::Error> {
             let mut state_dynamic = state.dynamic.lock().unwrap();
 
             // ## Start default-on tasks
-            for (id, task) in &state_dynamic.tasks {
-                let task = &state_dynamic.task_alloc[*task];
+            for (id, task) in state_dynamic.tasks.iter().map(|(x, y)| (x.clone(), y.clone())).collect::<Vec<_>>() {
+                let task = &state_dynamic.task_alloc[task];
                 let user_on;
                 match &task.specific {
                     TaskStateSpecific::Empty(s) => {
@@ -220,7 +220,7 @@ pub(crate) fn main(log: &Log, args: DemonRunArgs) -> Result<(), loga::Error> {
                 if !user_on {
                     continue;
                 }
-                set_task_user_on(&state, &state_dynamic, id);
+                set_task_user_on(&state, &mut state_dynamic, &id);
             }
 
             // ## Schedule tasks
@@ -237,9 +237,9 @@ pub(crate) fn main(log: &Log, args: DemonRunArgs) -> Result<(), loga::Error> {
         let state = state.clone();
 
         fn task_off_all(state: &Arc<State>) {
-            let state_dynamic = state.dynamic.lock().unwrap();
-            for task_id in state_dynamic.tasks.keys() {
-                set_task_user_off(state, &state_dynamic, task_id);
+            let mut state_dynamic = state.dynamic.lock().unwrap();
+            for task_id in state_dynamic.tasks.keys().cloned().collect::<Vec<_>>() {
+                set_task_user_off(state, &mut state_dynamic, &task_id);
             }
         }
 
@@ -376,7 +376,7 @@ async fn handle_ipc(state: Arc<State>, mut conn: UnixStream) {
                                 if !m.unique {
                                     return Err(format!("A task with this ID already exists"));
                                 }
-                                if !task_stopped(task) {
+                                if !is_task_stopped(task) {
                                     return Err(format!("Task isn't stopped yet"));
                                 }
                                 let same = match (&m.spec, &task.specific) {
@@ -430,7 +430,7 @@ async fn handle_ipc(state: Arc<State>, mut conn: UnixStream) {
                             let Some(task) = maybe_get_task(&state_dynamic, &m.0) else {
                                 return Ok(());
                             };
-                            if !task_stopped(&task) {
+                            if !is_task_stopped(&task) {
                                 return Err(format!("Task isn't stopped yet"));
                             }
                             delete_task(&mut state_dynamic, &m.0);
@@ -519,7 +519,7 @@ async fn handle_ipc(state: Arc<State>, mut conn: UnixStream) {
                                 let Some(task) = maybe_get_task(&state_dynamic, &m.0) else {
                                     return Err(format!("Unknown task [{}]", m.0));
                                 };
-                                if task_started(task) {
+                                if is_task_started(task) {
                                     return Ok(());
                                 }
                                 task.started_waiters.borrow_mut().push(notify_tx);
@@ -544,7 +544,7 @@ async fn handle_ipc(state: Arc<State>, mut conn: UnixStream) {
                                 let Some(task) = maybe_get_task(&state_dynamic, &m.0) else {
                                     return Err(format!("Unknown task [{}]", m.0));
                                 };
-                                if task_stopped(task) {
+                                if is_task_stopped(task) {
                                     return Ok(());
                                 }
                                 task.stopped_waiters.borrow_mut().push(notify_tx);
@@ -586,12 +586,12 @@ async fn handle_ipc(state: Arc<State>, mut conn: UnixStream) {
                                     let push_status;
                                     let task = get_task(&state_dynamic, &task_id);
                                     push_status = TaskDependencyStatus {
-                                        on: task_on(task),
-                                        started: task_started(task),
+                                        on: is_task_on(task),
+                                        started: is_task_started(task),
                                         dependency_type: dependency_type,
                                         related: HashMap::new(),
                                     };
-                                    upstream(task, |upstream| {
+                                    walk_task_upstream(task, |upstream| {
                                         for (next_id, next_dep_type) in upstream {
                                             frontier.push((true, next_id.clone(), match dependency_type {
                                                 DependencyType::Strong => *next_dep_type,
@@ -625,8 +625,8 @@ async fn handle_ipc(state: Arc<State>, mut conn: UnixStream) {
                                     let push_status;
                                     let task = get_task(&state_dynamic, &task_id);
                                     push_status = TaskDependencyStatus {
-                                        on: task_on(task),
-                                        started: task_started(task),
+                                        on: is_task_on(task),
+                                        started: is_task_started(task),
                                         dependency_type: dependency_type,
                                         related: HashMap::new(),
                                     };

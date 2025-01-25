@@ -9,8 +9,8 @@ use {
             plan_event_started,
             plan_event_stopped,
             plan_event_stopping,
-            plan_set_task_user_off,
-            plan_set_task_user_on,
+            plan_set_task_direct_off,
+            plan_set_task_direct_on,
             ExecutePlan,
         },
         task_util::{
@@ -256,13 +256,13 @@ fn event_stopped(state: &Arc<State>, state_dynamic: &mut StateDynamic, task_id: 
 
 pub(crate) fn set_task_user_on(state: &Arc<State>, state_dynamic: &mut StateDynamic, root_task_id: &TaskId) {
     let mut plan = ExecutePlan::default();
-    plan_set_task_user_on(state_dynamic, &mut plan, root_task_id);
+    plan_set_task_direct_on(state_dynamic, &mut plan, root_task_id);
     execute(state, state_dynamic, plan);
 }
 
 pub(crate) fn set_task_user_off(state: &Arc<State>, state_dynamic: &mut StateDynamic, task_id: &TaskId) {
     let mut plan = ExecutePlan::default();
-    plan_set_task_user_off(state_dynamic, &mut plan, task_id);
+    plan_set_task_direct_off(state_dynamic, &mut plan, task_id);
     execute(state, state_dynamic, plan);
 }
 
@@ -630,7 +630,6 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                     }
                 });
             },
-            TaskStateSpecific::External => unreachable!(),
         }
     }
     for task_id in plan.stop {
@@ -656,7 +655,6 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                     }
                 }
             },
-            TaskStateSpecific::External => unreachable!(),
         }
     }
 }

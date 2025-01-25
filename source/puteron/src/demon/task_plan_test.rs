@@ -15,8 +15,8 @@ use {
             TaskState_,
         },
         task_plan::{
-            plan_set_task_user_off,
-            plan_set_task_user_on,
+            plan_set_task_direct_off,
+            plan_set_task_direct_on,
             ExecutePlan,
         },
         task_util::{
@@ -86,11 +86,10 @@ fn check<
 fn task(id: &str, specific: TaskStateSpecific) -> TaskState_ {
     return TaskState_ {
         id: id.to_string(),
-        user_on: Cell::new((match &specific {
+        direct_on: Cell::new((match &specific {
             TaskStateSpecific::Empty(s) => s.spec.default_on,
             TaskStateSpecific::Long(s) => s.spec.default_on,
             TaskStateSpecific::Short(s) => s.spec.default_on,
-            TaskStateSpecific::External => false,
         }, DateTime::UNIX_EPOCH)),
         transitive_on: Cell::new((false, DateTime::UNIX_EPOCH)),
         downstream: Default::default(),
@@ -223,7 +222,7 @@ fn build_state(tasks: impl IntoIterator<Item = TaskState_>) -> StateDynamic {
     // Set transitive_on
     for task_id in state_dynamic.tasks.keys() {
         let root_task = get_task(&state_dynamic, task_id);
-        if !root_task.user_on.get().0 {
+        if !root_task.direct_on.get().0 {
             continue;
         }
         let mut frontier = vec![];
@@ -262,7 +261,7 @@ fn single_on() {
         task_empty("a", false, []),
     ]);
     let mut plan = ExecutePlan::default();
-    plan_set_task_user_on(&state_dynamic, &mut plan, &"a".to_string());
+    plan_set_task_direct_on(&state_dynamic, &mut plan, &"a".to_string());
     check(&state_dynamic, plan, [], [], ["a"], []);
 }
 
@@ -273,7 +272,7 @@ fn single_on_proc() {
         task_long("a", false, ProcState::Stopped, []),
     ]);
     let mut plan = ExecutePlan::default();
-    plan_set_task_user_on(&state_dynamic, &mut plan, &"a".to_string());
+    plan_set_task_direct_on(&state_dynamic, &mut plan, &"a".to_string());
     check(&state_dynamic, plan, ["a"], [], [], []);
 }
 
@@ -284,7 +283,7 @@ fn single_on_noop() {
         task_empty("a", true, []),
     ]);
     let mut plan = ExecutePlan::default();
-    plan_set_task_user_on(&state_dynamic, &mut plan, &"a".to_string());
+    plan_set_task_direct_on(&state_dynamic, &mut plan, &"a".to_string());
     check(&state_dynamic, plan, [], [], ["a"], []);
 }
 
@@ -295,7 +294,7 @@ fn single_off() {
         task_empty("a", true, []),
     ]);
     let mut plan = ExecutePlan::default();
-    plan_set_task_user_off(&state_dynamic, &mut plan, &"a".to_string());
+    plan_set_task_direct_off(&state_dynamic, &mut plan, &"a".to_string());
     check(&state_dynamic, plan, [], [], [], ["a"]);
 }
 
@@ -306,7 +305,7 @@ fn single_off_proc() {
         task_long("a", true, ProcState::Starting, []),
     ]);
     let mut plan = ExecutePlan::default();
-    plan_set_task_user_off(&state_dynamic, &mut plan, &"a".to_string());
+    plan_set_task_direct_off(&state_dynamic, &mut plan, &"a".to_string());
     check(&state_dynamic, plan, [], ["a"], [], []);
 }
 
@@ -317,7 +316,7 @@ fn single_off_proc_short() {
         task_short("a", true, ProcState::Started, []),
     ]);
     let mut plan = ExecutePlan::default();
-    plan_set_task_user_off(&state_dynamic, &mut plan, &"a".to_string());
+    plan_set_task_direct_off(&state_dynamic, &mut plan, &"a".to_string());
     check(&state_dynamic, plan, [], [], [], ["a"]);
 }
 
@@ -328,7 +327,7 @@ fn single_off_noop() {
         task_long("a", false, ProcState::Stopped, []),
     ]);
     let mut plan = ExecutePlan::default();
-    plan_set_task_user_off(&state_dynamic, &mut plan, &"a".to_string());
+    plan_set_task_direct_off(&state_dynamic, &mut plan, &"a".to_string());
     check(&state_dynamic, plan, [], [], [], ["a"]);
 }
 
@@ -340,7 +339,7 @@ fn start_strong_upstream() {
         task_empty("b", false, [("a", DependencyType::Strong)]),
     ]);
     let mut plan = ExecutePlan::default();
-    plan_set_task_user_on(&state_dynamic, &mut plan, &"b".to_string());
+    plan_set_task_direct_on(&state_dynamic, &mut plan, &"b".to_string());
     check(&state_dynamic, plan, [], [], ["a", "b"], []);
 }
 
@@ -352,7 +351,7 @@ fn start_strong_upstream_proc() {
         task_long("b", false, ProcState::Stopped, [("a", DependencyType::Strong)]),
     ]);
     let mut plan = ExecutePlan::default();
-    plan_set_task_user_on(&state_dynamic, &mut plan, &"b".to_string());
+    plan_set_task_direct_on(&state_dynamic, &mut plan, &"b".to_string());
     check(&state_dynamic, plan, ["b"], [], ["a"], []);
 }
 
@@ -364,7 +363,7 @@ fn start_weak_downstream() {
         task_long("c", true, ProcState::Stopped, [("b", DependencyType::Weak)]),
     ]);
     let mut plan = ExecutePlan::default();
-    plan_set_task_user_on(&state_dynamic, &mut plan, &"b".to_string());
+    plan_set_task_direct_on(&state_dynamic, &mut plan, &"b".to_string());
     check(&state_dynamic, plan, ["c"], [], ["b"], []);
 }
 
@@ -377,7 +376,7 @@ fn start_strong_upstream_weak_downstream_1() {
         task_long("c", true, ProcState::Stopped, [("b", DependencyType::Weak)]),
     ]);
     let mut plan = ExecutePlan::default();
-    plan_set_task_user_on(&state_dynamic, &mut plan, &"b".to_string());
+    plan_set_task_direct_on(&state_dynamic, &mut plan, &"b".to_string());
     check(&state_dynamic, plan, ["a"], [], [], []);
 }
 
@@ -390,7 +389,7 @@ fn start_strong_upstream_weak_downstream_2() {
         task_long("c", true, ProcState::Stopped, [("b", DependencyType::Weak)]),
     ]);
     let mut plan = ExecutePlan::default();
-    plan_set_task_user_on(&state_dynamic, &mut plan, &"b".to_string());
+    plan_set_task_direct_on(&state_dynamic, &mut plan, &"b".to_string());
     check(&state_dynamic, plan, ["c"], [], ["a", "b"], []);
 }
 
@@ -402,7 +401,7 @@ fn stop_strong_upstream() {
         task_empty("b", true, [("a", DependencyType::Strong)]),
     ]);
     let mut plan = ExecutePlan::default();
-    plan_set_task_user_off(&state_dynamic, &mut plan, &"b".to_string());
+    plan_set_task_direct_off(&state_dynamic, &mut plan, &"b".to_string());
     check(&state_dynamic, plan, [], ["a"], [], ["b"]);
 }
 
@@ -414,7 +413,7 @@ fn stop_weak_downstream() {
         task_empty("c", true, [("b", DependencyType::Weak)]),
     ]);
     let mut plan = ExecutePlan::default();
-    plan_set_task_user_off(&state_dynamic, &mut plan, &"b".to_string());
+    plan_set_task_direct_off(&state_dynamic, &mut plan, &"b".to_string());
     check(&state_dynamic, plan, [], ["b"], [], ["c"]);
 }
 
@@ -426,7 +425,7 @@ fn strong_downstream_dont_stop() {
         task_empty("c", true, [("b", DependencyType::Strong)]),
     ]);
     let mut plan = ExecutePlan::default();
-    plan_set_task_user_off(&state_dynamic, &mut plan, &"b".to_string());
+    plan_set_task_direct_off(&state_dynamic, &mut plan, &"b".to_string());
     check(&state_dynamic, plan, [], [], [], []);
 }
 
@@ -439,7 +438,7 @@ fn stop_strong_upstream_weak_downstream_1() {
         task_long("c", true, ProcState::Started, [("b", DependencyType::Weak)]),
     ]);
     let mut plan = ExecutePlan::default();
-    plan_set_task_user_off(&state_dynamic, &mut plan, &"b".to_string());
+    plan_set_task_direct_off(&state_dynamic, &mut plan, &"b".to_string());
     check(&state_dynamic, plan, [], ["c"], ["a", "b"], []);
 }
 
@@ -452,6 +451,6 @@ fn stop_strong_upstream_weak_downstream_2() {
         task_empty("c", true, [("b", DependencyType::Weak)]),
     ]);
     let mut plan = ExecutePlan::default();
-    plan_set_task_user_off(&state_dynamic, &mut plan, &"b".to_string());
+    plan_set_task_direct_off(&state_dynamic, &mut plan, &"b".to_string());
     check(&state_dynamic, plan, [], ["a"], [], ["b", "c"]);
 }

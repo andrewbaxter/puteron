@@ -38,7 +38,7 @@ pub(crate) fn validate_new_task(
     task_id: &TaskId,
     task: &interface::task::Task,
 ) {
-    let upstream = match task {
+    let upstream: Vec<&String> = match task {
         Task::Empty(s) => {
             s.upstream.keys().collect()
         },
@@ -48,7 +48,6 @@ pub(crate) fn validate_new_task(
         Task::Short(s) => {
             s.upstream.keys().collect()
         },
-        Task::External => vec![],
     };
     for upstream_id in upstream {
         let Some(upstream_task) = maybe_get_task(&state_dynamic, &upstream_id) else {
@@ -87,7 +86,6 @@ pub(crate) fn validate_new_task(
                     }
                 }
             },
-            TaskStateSpecific::External => { },
         }
     }
 }
@@ -145,13 +143,10 @@ pub(crate) fn build_task(state_dynamic: &mut StateDynamic, task_id: TaskId, spec
                 failed_start_count: Cell::new(0),
             });
         },
-        interface::task::Task::External => {
-            specific = TaskStateSpecific::External;
-        },
     }
     let task = state_dynamic.task_alloc.insert(TaskState_ {
         id: task_id.clone(),
-        user_on: Cell::new((false, Utc::now())),
+        direct_on: Cell::new((false, Utc::now())),
         transitive_on: Cell::new((false, Utc::now())),
         downstream: Default::default(),
         specific: specific,

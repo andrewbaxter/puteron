@@ -96,7 +96,6 @@ pub(crate) fn plan_start_task(state_dynamic: &StateDynamic, plan: &mut ExecutePl
             plan.start.insert(task.id.clone());
             return false;
         },
-        TaskStateSpecific::External => unreachable!(),
     }
 }
 
@@ -128,16 +127,15 @@ pub(crate) fn plan_stop_task(state_dynamic: &StateDynamic, plan: &mut ExecutePla
             }
             return false;
         },
-        TaskStateSpecific::External => unreachable!(),
     }
 }
 
-pub(crate) fn plan_set_task_user_on(state_dynamic: &StateDynamic, plan: &mut ExecutePlan, root_task_id: &TaskId) {
+pub(crate) fn plan_set_task_direct_on(state_dynamic: &StateDynamic, plan: &mut ExecutePlan, root_task_id: &TaskId) {
     // Update on flags and check if the effective `on` state has changed
     {
         let task = get_task(state_dynamic, root_task_id);
         let was_on = is_task_on(&task);
-        task.user_on.set((true, Utc::now()));
+        task.direct_on.set((true, Utc::now()));
         if was_on {
             return;
         }
@@ -193,7 +191,7 @@ pub(crate) fn plan_set_task_user_on(state_dynamic: &StateDynamic, plan: &mut Exe
     propagate_start_downstream(state_dynamic, plan, root_task_id);
 }
 
-pub(crate) fn plan_set_task_user_off(state_dynamic: &StateDynamic, plan: &mut ExecutePlan, task_id: &TaskId) {
+pub(crate) fn plan_set_task_direct_off(state_dynamic: &StateDynamic, plan: &mut ExecutePlan, task_id: &TaskId) {
     // Update on flags and check if the effective `on` state has changed
     {
         let task = get_task(state_dynamic, &task_id);
@@ -201,7 +199,7 @@ pub(crate) fn plan_set_task_user_off(state_dynamic: &StateDynamic, plan: &mut Ex
         if was_off {
             return;
         }
-        task.user_on.set((false, Utc::now()));
+        task.direct_on.set((false, Utc::now()));
         if task.transitive_on.get().0 {
             return;
         }
@@ -236,7 +234,6 @@ pub(crate) fn plan_set_task_user_off(state_dynamic: &StateDynamic, plan: &mut Ex
                             }
                             return specific.stop.borrow().is_some();
                         },
-                        TaskStateSpecific::External => unreachable!(),
                     }
                 }
 

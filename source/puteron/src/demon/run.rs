@@ -101,6 +101,9 @@ use {
 #[derive(Aargvark)]
 pub struct DemonRunArgs {
     config: AargvarkJson<Config>,
+    /// Validate that the config can be parsed and is valid per early checks (no
+    /// dependency cycles, etc) and exit, don't run anything.
+    validate: Option<()>,
 }
 
 pub(crate) fn main(log: &Log, args: DemonRunArgs) -> Result<(), loga::Error> {
@@ -141,7 +144,7 @@ pub(crate) fn main(log: &Log, args: DemonRunArgs) -> Result<(), loga::Error> {
             let task_ids = specs.keys().cloned().collect::<Vec<_>>();
             for task_id in &task_ids {
                 // Find frontier tasks (all upstreams created)
-                let upstream = match &specs.get(task_id).unwrap() {
+                let upstream: Vec<&String> = match &specs.get(task_id).unwrap() {
                     Task::Empty(s) => {
                         s.upstream.keys().collect()
                     },
@@ -151,7 +154,6 @@ pub(crate) fn main(log: &Log, args: DemonRunArgs) -> Result<(), loga::Error> {
                     Task::Short(s) => {
                         s.upstream.keys().collect()
                     },
-                    Task::External => vec![],
                 };
                 let mut all_upstream_created = true;
                 for upstream_id in upstream {
@@ -187,6 +189,9 @@ pub(crate) fn main(log: &Log, args: DemonRunArgs) -> Result<(), loga::Error> {
         if !errors.is_empty() {
             return Err(loga::agg_err("One or more errors with task specifications", errors));
         }
+        if args.validate.is_some() {
+            return Ok(());
+        }
     }
 
     // # Start async
@@ -211,9 +216,6 @@ pub(crate) fn main(log: &Log, args: DemonRunArgs) -> Result<(), loga::Error> {
                     },
                     TaskStateSpecific::Short(s) => {
                         user_on = s.spec.default_on;
-                    },
-                    TaskStateSpecific::External => {
-                        user_on = false;
                     },
                 }
                 log.log_with(loga::DEBUG, "Reporting task initial state-", ea!(task = task.id, on = user_on));
@@ -383,7 +385,6 @@ async fn handle_ipc(state: Arc<State>, mut conn: UnixStream) {
                                     (Task::Empty(new), TaskStateSpecific::Empty(old)) => new == &old.spec,
                                     (Task::Long(new), TaskStateSpecific::Long(old)) => new == &old.spec,
                                     (Task::Short(new), TaskStateSpecific::Short(old)) => new == &old.spec,
-                                    (Task::External, TaskStateSpecific::External) => true,
                                     _ => false,
                                 };
                                 if same {
@@ -415,7 +416,6 @@ async fn handle_ipc(state: Arc<State>, mut conn: UnixStream) {
                                 Task::Empty(s) => s.default_on,
                                 Task::Long(s) => s.default_on,
                                 Task::Short(s) => s.default_on,
-                                Task::External => false,
                             };
                             build_task(&mut state_dynamic, m.task.clone(), m.spec);
 
@@ -442,8 +442,8 @@ async fn handle_ipc(state: Arc<State>, mut conn: UnixStream) {
                                 return Err(format!("Unknown task [{}]", m.0));
                             };
                             return Ok(TaskStatus {
-                                direct_on: task.user_on.get().0,
-                                direct_on_at: task.user_on.get().1,
+                                direct_on: task.direct_on.get().0,
+                                direct_on_at: task.direct_on.get().1,
                                 transitive_on: task.transitive_on.get().0,
                                 transitive_on_at: task.transitive_on.get().1,
                                 specific: match &task.specific {
@@ -469,11 +469,6 @@ async fn handle_ipc(state: Arc<State>, mut conn: UnixStream) {
                                             restarts: s.failed_start_count.get(),
                                         },
                                     ),
-                                    TaskStateSpecific::External => interface
-                                    ::message
-                                    ::v1
-                                    ::TaskStatusSpecific
-                                    ::External,
                                 },
                             });
                         }).await,
@@ -492,9 +487,6 @@ async fn handle_ipc(state: Arc<State>, mut conn: UnixStream) {
                                 },
                                 TaskStateSpecific::Short(s) => {
                                     out = Task::Short(s.spec.clone());
-                                },
-                                TaskStateSpecific::External => {
-                                    out = Task::External;
                                 },
                             }
                             return Ok(out);
@@ -566,7 +558,7 @@ async fn handle_ipc(state: Arc<State>, mut conn: UnixStream) {
                             let state_dynamic = state.dynamic.lock().unwrap();
                             let mut out = vec![];
                             for (task_id, state) in &state_dynamic.tasks {
-                                if state_dynamic.task_alloc[*state].user_on.get().0 {
+                                if state_dynamic.task_alloc[*state].direct_on.get().0 {
                                     out.push(task_id.clone());
                                 }
                             }

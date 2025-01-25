@@ -65,12 +65,11 @@ pub(crate) enum TaskStateSpecific {
     Empty(TaskStateEmpty),
     Long(TaskStateLong),
     Short(TaskStateShort),
-    External,
 }
 
 pub(crate) struct TaskState_ {
     pub(crate) id: TaskId,
-    pub(crate) user_on: Cell<(bool, DateTime<Utc>)>,
+    pub(crate) direct_on: Cell<(bool, DateTime<Utc>)>,
     pub(crate) transitive_on: Cell<(bool, DateTime<Utc>)>,
     pub(crate) downstream: RefCell<HashMap<TaskId, DependencyType>>,
     pub(crate) specific: TaskStateSpecific,

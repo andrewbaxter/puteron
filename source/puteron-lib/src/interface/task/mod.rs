@@ -50,8 +50,11 @@ pub enum DependencyType {
 #[derive(Serialize, Deserialize, JsonSchema, Clone, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct TaskSpecEmpty {
+    /// Dependencies. All dependencies must be started for this task to start, and if
+    /// any dependency moves out of the started state this task will stop.
     #[serde(default)]
     pub upstream: HashMap<String, DependencyType>,
+    /// Sets default on initially when the task is created (ex: at puteron start)
     #[serde(default)]
     pub default_on: bool,
 }
@@ -78,8 +81,11 @@ pub enum StartedCheck {
 #[derive(Serialize, Deserialize, JsonSchema, Clone, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct TaskSpecLong {
+    /// Dependencies. All dependencies must be started for this task to start, and if
+    /// any dependency moves out of the started state this task will stop.
     #[serde(default)]
     pub upstream: HashMap<String, DependencyType>,
+    /// Sets default on initially when the task is created (ex: at puteron start)
     #[serde(default)]
     pub default_on: bool,
     /// Command to run
@@ -113,6 +119,8 @@ pub enum ShortTaskStartedAction {
 #[derive(Serialize, Deserialize, JsonSchema, Clone, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct TaskSpecShort {
+    /// Dependencies. All dependencies must be started for this task to start, and if
+    /// any dependency moves out of the started state this task will stop.
     #[serde(default)]
     pub upstream: HashMap<String, DependencyType>,
     /// Turn the task on as soon as it is loaded
@@ -141,8 +149,9 @@ pub struct TaskSpecShort {
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Task {
     /// This is a task that has no internal state or process, etc, but can be used as a
-    /// node in the graph for grouping other tasks (a.k.a. a target or loosely, a
-    /// run-level).
+    /// node in the graph for grouping other tasks (a.k.a. a target or, loosely, a
+    /// run-level) or to represent the state of some external process (like services
+    /// managed by systemd).
     ///
     /// An empty task starts immediately and never fails.
     Empty(TaskSpecEmpty),
@@ -155,11 +164,4 @@ pub enum Task {
     ///
     /// Short tasks are considered started once they successfully exit.
     Short(TaskSpecShort),
-    /// An external task is a task where the state is determined by an external process
-    /// that communicates with puteron via API to communicate state changes.  Since it
-    /// is externally managed, it can have no dependencies.
-    ///
-    /// When the task is set `user_on`, it is immediately also considered `started`
-    /// (and vice-versa for `user_off`).
-    External,
 }

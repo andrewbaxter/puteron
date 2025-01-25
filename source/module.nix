@@ -1,218 +1,209 @@
 { config, pkgs, lib, ... }:
+let
+  options = {
+    debug = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = "Enable debug logging";
+    };
+    environment = lib.mkOption {
+      type = lib.types.attrset;
+      default = null;
+    };
+    tasks = lib.mkOption {
+      description = "Each key is the name of a task, values are converted to task json specifications (see puteron task json spec)";
+      type = lib.types.attrsOf (lib.types.oneOf [
+        lib.types.str
+        lib.types.attrs
+      ]);
+    };
+    controlSystemd = lib.mkOption {
+      description = "A map of systemd unit names to control options or null to disable. Where not null, this will create a `long` or `short` puteron task (depending on whether the options indicate it's a oneshot unit) that invokes the wrapper `puteron-control-systemd` command to control the systemd unit from puteron itself (i.e. when started, it'll start the unit; when stopped, it'll stop the unit). The task name will be in the form `systemd-UNIT-UNITSUFFIX`.";
+      default = { };
+      type = lib.types.attrsOf
+        (lib.types.oneOf [
+          lib.types.null
+          (lib.types.record {
+            contents = {
+              oneshot = lib.mkOption {
+                description = "The systemd unit is a oneshot service (changes how child process exits are handled)";
+                default = false;
+                type = lib.types.bool;
+              };
+              exitCode = lib.mkOption
+                {
+                  description = "The unit code considered as a successful exit (default 0)";
+                  default = null;
+                  type = lib.types.oneOf [ lib.types.bool lib.types.null ];
+                };
+            };
+          })
+        ]);
+    };
+    listenSystemd = lib.mkOption
+      {
+        description = "A map of systemd unit names (with dotted suffix) to a boolean. Where true this will create an `empty` puteron task that is turned on and off to match activation of the corresponding systemd unit. Add the task as a weak upstream of other tasks. Only implemented for `.service`, `.mount`, `.target` at this time. The task name will be in the form `systemd-UNIT-UNITSUFFIX`.";
+        default = { };
+        type = lib.types.attrsOf (lib.types.oneOf [ lib.types.bool lib.types.null ]);
+      };
+  };
+in
 {
   options = {
-    puteron =
-      let
-        submodule = spec: lib.types.submodule { options = spec; };
-        submoduleEnum = spec: lib.types.addCheck
-          (lib.types.submodule {
-            options = lib.listToAttrs
-              (map
-                (e: {
-                  name = e.name;
-                  value = lib.mkOption {
-                    default = null;
-                    type = lib.types.nullOr e.value;
+    puteron = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = "Enable the puteron service for managing tasks (services). This will create a systemd root and user unit to run puteron, with the task config directory in the Nix store plus an additional directory in `/etc/puteron/tasks` or `~/.config/puteron/tasks`.";
+      };
+      user = options;
+    } // options;
+  };
+  config =
+    let
+      pkg = import ./package.nix {
+        pkgs = pkgs;
+        debug = config.puteron.debug;
+      };
+
+      # Build an options level
+      build = { options, wantedBy }:
+        let
+          # The `empty` systemd task name is based on the systemd unit name + suffix
+          mapSystemdTaskName =
+            let mangled = builtins.replaceStrings [ "." "@" ":" ] [ "-" "-" "-" ] name; in "systemd-${mangled}";
+
+          # Defined tasks + generated `empty` tasks for systemd units
+          tasks = { }
+            // options.tasks
+            // (lib.attrsets.mapAttrs'
+            (name: value: { name = mapSystemdTaskName name; value = "empty"; })
+            (lib.attrsets.filterAttrs (name: value: value != null) options.listenSystemd))
+            // (lib.attrsets.mapAttrs'
+            (name: value: {
+              name = mapSystemdTaskName name;
+              value =
+                if value.oneshot
+                then {
+                  "short" = {
+                    command = [ ]
+                      ++ [ "${pkg}/bin/puteron-control-systemd" "--oneshot" ]
+                      ++ (lib.lists.optional (value.exitCode != null) [ "--exit-code" "${builtins.toString value.exitCode}" ]);
                   };
-                })
-                (lib.attrsToList spec));
-          })
-          (v: builtins.length (lib.attrsToList v) == 1);
-        upstreamArg = lib.mkOption {
-          default = null;
-          type = lib.types.nullOr (lib.types.attrsOf (lib.types.enum [ "strong" "weak" ]));
-        };
-        defaultOnArg = lib.mkOption {
-          default = null;
-          type = lib.types.nullOr lib.types.bool;
-        };
-        envArg = lib.mkOption {
-          default = null;
-          type = lib.types.nullOr (submodule {
-            keep_all = lib.mkOption {
-              default = null;
-              type = lib.types.nullOr lib.types.bool;
-            };
-            keep = lib.mkOption {
-              default = null;
-              type = lib.types.nullOr (lib.types.attrsOf lib.types.bool);
-            };
-            add = lib.mkOption {
-              default = null;
-              type = lib.types.nullOr (lib.types.attrsOf lib.types.str);
-            };
-          });
-        };
-        simpleDurationType = lib.types.strMatching "\\d+[hms]";
-        durationArg = lib.mkOption {
-          default = null;
-          type = lib.types.nullOr simpleDurationType;
-          description = "Like 10s or 5m";
-        };
-        commandArg = lib.mkOption {
-          type = submodule {
-            working_directory = lib.mkOption {
-              default = null;
-              type = lib.types.nullOr lib.types.str;
-            };
-            environment = envArg;
-            command = lib.mkOption {
-              type = lib.types.listOf lib.types.str;
-            };
+                }
+                else {
+                  "long" = {
+                    command = [ ]
+                      ++ [ "${pkg}/bin/puteron-control-systemd" ]
+                      ++ (lib.lists.optional (value.exitCode != null) [ "--exit-code" "${builtins.toString value.exitCode}" ]);
+                  };
+                };
+            })
+            (lib.attrsets.filterAttrs (name: value: value != null) options.controlSystemd));
+
+          # Build task dir out of tasks
+          tasksDir = derivation {
+            name = "${name}-tasks-dir";
+            system = builtins.currentSystem;
+            builder = "${pkgs.python3}/bin/python3";
+            args = [
+              ./module_gendir.py
+              (builtins.toJSON tasks)
+            ];
           };
-        };
-      in
-      {
-        enable = lib.mkOption {
-          type = lib.types.bool;
-          default = false;
-          description = "Enable the puteron service for managing puteron services (tasks)";
-        };
-        debug = lib.mkOption {
-          type = lib.types.bool;
-          default = false;
-          description = "Enable debug logging";
-        };
-        environment = envArg;
-        tasks = lib.mkOption {
-          description = "See puteron documentation for field details";
-          type = lib.types.attrsOf (submoduleEnum {
-            external = lib.types.str;
-            empty = submodule {
-              upstream = upstreamArg;
-              default_on = defaultOnArg;
+
+          # Build daemon config
+          demonConfig = (pkgs.writeText "${name}-config" (builtins.toJSON (builtins.listToAttrs (
+            [ ]
+            ++ (lib.lists.optional (environment != null) {
+              name = "environment";
+              value = environment;
+            })
+            ++ [{
+              name = "task_dirs";
+              value = [ tasksDir "%E/puteron/tasks" ];
+            }]
+          ))));
+
+          # Validate the config - use this as a dep so that the build will fail if validation has errors
+          validateConfig = derivation {
+            name = "${name}-validate-config";
+            system = builtins.currentSystem;
+            builder = "${pkgs.bash}/bin/bash";
+            args = [
+              (pkgs.writeShellScript "${name}-validate-config-run" ''
+                set -xeu
+                ${config.system.build.puteron_pkg}/bin/puteron demon run ${demonConfig} --validate
+                touch $out
+              '')
+            ];
+          };
+
+          # Build hooks for systemd services hooked with `empty` tasks 
+          buildSystemdAddons = type:
+            let
+              suffix = ".${type}";
+            in
+            (lib.attrsets.mapAttrs'
+              (name: value: {
+                name = lib.strings.removeSuffix suffix name;
+                value =
+                  {
+                    serviceConfig.ExecStartPost = "${pkg}/bin/puteron on ${listenSystemdTask name}";
+                    serviceConfig.ExecStopPre = "${pkg}/bin/puteron off ${listenSystemdTask name}";
+                  };
+              })
+              (lib.attrsets.filterAttrs
+                (name: value: lib.strings.hasSuffix suffix name)
+                listenSystemd));
+        in
+        {
+          script = assert "${validateConfig}" != "";
+            lib.concatStringsSep " " ([ ]
+              ++ [ "${pkg}/bin/puteron" "demon" "run" "${demonConfig}" ]
+              ++ (lib.lists.optional config.puteron.debug "--debug")
+            );
+
+          systemdServices = { }
+            # Root service
+            // (lib.mkIf config.puteron.enable {
+            puteron = {
+              wantedBy = [ wantedBy ];
+              serviceConfig.Type = "simple";
+              startLimitIntervalSec = 0;
+              serviceConfig.Restart = "on-failure";
+              serviceConfig.RestartSec = 60;
+              script = config.system.build.puteronScript;
             };
-            long = submodule {
-              upstream = upstreamArg;
-              default_on = defaultOnArg;
-              command = commandArg;
-              started_check = lib.mkOption {
-                default = null;
-                type = lib.types.nullOr (submoduleEnum {
-                  tcp_socket = lib.types.str;
-                  path = lib.types.str;
-                });
-              };
-              restart_delay = durationArg;
-              stop_timeout = durationArg;
-            };
-            short = submodule {
-              upstream = upstreamArg;
-              default_on = defaultOnArg;
-              schedule = lib.mkOption {
-                default = null;
-                type = lib.types.listOf (submoduleEnum {
-                  period = submodule {
-                    period = lib.mkOption {
-                      type = lib.types.str;
-                    };
-                    scattered = lib.mkOption {
-                      default = null;
-                      type = lib.types.nullOr lib.types.bool;
-                    };
-                  };
-                  hourly = lib.types.str;
-                  daily = lib.types.str;
-                  weekly = submodule {
-                    weekday = lib.mkOption {
-                      type = lib.types.str;
-                    };
-                    time = lib.mkOption {
-                      type = lib.types.str;
-                    };
-                  };
-                  monthly = submodule {
-                    day = lib.mkOption {
-                      type = lib.types.int;
-                    };
-                    time = lib.mkOption {
-                      type = lib.types.str;
-                    };
-                  };
-                  yearly = submodule {
-                    month = lib.mkOption {
-                      type = lib.types.str;
-                    };
-                    day = lib.mkOption {
-                      type = lib.types.int;
-                    };
-                    time = lib.mkOption {
-                      type = lib.types.str;
-                    };
-                  };
-                });
-              };
-              command = commandArg;
-              success_codes = lib.mkOption {
-                default = null;
-                type = lib.types.nullOr (lib.types.listOf lib.types.int);
-              };
-              started_action = lib.mkOption {
-                default = null;
-                type = lib.types.nullOr (lib.types.enum [ "turn_off" "delete" ]);
-              };
-              restart_delay = durationArg;
-              stop_timeout = durationArg;
-            };
-          });
-        };
-      };
-  };
-  config = {
-    system.build.puteron_pkg = import ./package.nix {
-      pkgs = pkgs;
-      debug = config.puteron.debug;
-    };
-    system.build.puteron_script = pkgs.writeShellScript "puteron-run" (
-      let
-        removeAttrsNull = v:
-          if builtins.isAttrs v then
-            lib.listToAttrs
-              (map
-                (e: { name = e.name; value = removeAttrsNull e.value; })
-                (builtins.filter
-                  (e: e.value != null)
-                  (lib.attrsToList v)
-                )
-              )
-          else if builtins.isList v then map removeAttrsNull v
-          else v;
-        tasks = removeAttrsNull config.puteron.tasks;
-        taskDirs = derivation {
-          name = "puteron-task-configs";
-          system = builtins.currentSystem;
-          builder = "${pkgs.python3}/bin/python3";
-          args = [
-            ./module_gendir.py
-            (builtins.toJSON tasks)
-          ];
-        };
-        demon = (pkgs.writeText "puteron-config" (builtins.toJSON (removeAttrsNull (builtins.listToAttrs (
-          [ ]
-          ++ (lib.lists.optional (config.puteron.environment != null) {
-            name = "environment";
-            value = config.puteron.environment;
           })
-          ++ [{
-            name = "task_dirs";
-            value = [ taskDirs ];
-          }]
-        )))));
-      in
-      lib.concatStringsSep " " (
-        [ "${config.system.build.puteron_pkg}/bin/puteron" "demon" "run" "${demon}" ]
-        ++ (lib.lists.optional config.puteron.debug "--debug")
-      )
-    );
-    systemd.services = lib.mkIf config.puteron.enable {
-      puteron = {
-        wantedBy = [ "multi-user.target" ];
-        serviceConfig.Type = "simple";
-        startLimitIntervalSec = 0;
-        serviceConfig.Restart = "on-failure";
-        serviceConfig.RestartSec = 60;
-        script = config.system.build.puteron_script;
+            # Apply `empty` task hooks
+            // buildSystemdAddons "service";
+          # Apply `empty` task hooks
+          systemdTargets = buildSystemdAddons "target";
+          systemdMounts = buildSystemdAddons "mount";
+        };
+
+      # Generate at root + user levels
+      root = build {
+        options = config.puteron;
+        wantedBy = "multi-user.target";
       };
+      user = build {
+        options = config.puteron.user;
+        wantedBy = "default.target";
+      };
+    in
+    {
+      system.build.puteronPkg = pkg;
+
+      # Assemble root config
+      system.build.puteronScript = root.script;
+      systemd.services = root.systemdServices;
+      systemd.targets = root.systemdTargets;
+
+      # Assemble user config
+      system.build.puteronUserScript = user.script;
+      systemd.user.services = user.systemdServices;
+      systemd.user.targets = user.systemdTargets;
     };
-  };
 }

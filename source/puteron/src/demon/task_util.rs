@@ -26,7 +26,6 @@ pub(crate) fn walk_task_upstream<
         TaskStateSpecific::Empty(s) => return cb(&mut s.spec.upstream.iter()),
         TaskStateSpecific::Long(s) => return cb(&mut s.spec.upstream.iter()),
         TaskStateSpecific::Short(s) => return cb(&mut s.spec.upstream.iter()),
-        TaskStateSpecific::External => return cb(&mut [].into_iter()),
     }
 }
 
@@ -42,7 +41,7 @@ pub(crate) fn maybe_get_task<'a>(state_dynamic: &'a StateDynamic, task_id: &Task
 }
 
 pub(crate) fn is_task_on(t: &TaskState_) -> bool {
-    return t.user_on.get().0 || t.transitive_on.get().0;
+    return t.direct_on.get().0 || t.transitive_on.get().0;
 }
 
 pub(crate) fn is_task_started(t: &TaskState_) -> bool {
@@ -54,7 +53,6 @@ pub(crate) fn is_task_started(t: &TaskState_) -> bool {
         TaskStateSpecific::Short(s) => {
             return s.state.get().0 == ProcState::Started;
         },
-        TaskStateSpecific::External => unreachable!(),
     }
 }
 
@@ -97,7 +95,6 @@ pub(crate) fn is_task_stopped(t: &TaskState_) -> bool {
         TaskStateSpecific::Short(s) => {
             return s.state.get().0 == ProcState::Stopped;
         },
-        TaskStateSpecific::External => unreachable!(),
     }
 }
 

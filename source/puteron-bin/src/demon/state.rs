@@ -8,10 +8,10 @@ use {
         Utc,
     },
     loga::Log,
-    puteron_lib::interface::{
+    puteron::interface::{
         self,
         base::TaskId,
-        message::ProcState,
+        ipc::ProcState,
         task::DependencyType,
     },
     slotmap::{

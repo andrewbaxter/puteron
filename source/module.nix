@@ -93,16 +93,20 @@ in
                 if value.oneshot
                 then {
                   "short" = {
-                    command = [ ]
-                      ++ [ "${pkg}/bin/puteron-control-systemd" "--oneshot" ]
-                      ++ (lib.lists.optional (value.exitCode != null) [ "--exit-code" "${builtins.toString value.exitCode}" ]);
+                    command = {
+                      line = [ ]
+                        ++ [ "${pkg}/bin/puteron-control-systemd" "--oneshot" ]
+                        ++ (lib.lists.optional (value.exitCode != null) [ "--exit-code" "${builtins.toString value.exitCode}" ]);
+                    };
                   };
                 }
                 else {
                   "long" = {
-                    command = [ ]
-                      ++ [ "${pkg}/bin/puteron-control-systemd" ]
-                      ++ (lib.lists.optional (value.exitCode != null) [ "--exit-code" "${builtins.toString value.exitCode}" ]);
+                    command = {
+                      line = [ ]
+                        ++ [ "${pkg}/bin/puteron-control-systemd" ]
+                        ++ (lib.lists.optional (value.exitCode != null) [ "--exit-code" "${builtins.toString value.exitCode}" ]);
+                    };
                   };
                 };
             })
@@ -155,7 +159,7 @@ in
             name = "puteron-${levelName}-script";
             executable = true;
             text = (lib.concatStringsSep " " ([ ]
-              ++ [ "/usr/bin/sh" "${pkg}/bin/puteron" "demon" "run" "${demonConfig}" ]
+              ++ [ "${pkg}/bin/puteron" "demon" "run" "${demonConfig}" ]
               ++ (lib.lists.optional config.puteron.debug "--debug")
             ));
             checkPhase = ''

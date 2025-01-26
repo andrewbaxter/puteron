@@ -49,6 +49,6 @@
       });
   in
   buildRust {
-    root = ./puteron;
+    root = ./puteron-bin;
   })
 { }

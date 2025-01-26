@@ -1,4 +1,4 @@
 pub mod base;
-pub mod message;
+pub mod ipc;
 pub mod task;
 pub mod demon;

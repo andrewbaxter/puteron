@@ -1,6 +1,6 @@
 use {
     crate::{
-        ipc::client_req,
+        ipc_util::client_req,
         spec::merge_specs,
     },
     aargvark::{
@@ -13,10 +13,10 @@ use {
         Log,
         ResultContext,
     },
-    puteron_lib::interface::{
+    puteron::interface::{
         self,
         base::TaskId,
-        message::{
+        ipc::{
             RequestTaskOnOff,
             RequestAdd,
             RequestDemonSpecDirs,

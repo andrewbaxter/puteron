@@ -29,8 +29,8 @@ use {
         is_task_stopped,
     },
     chrono::DateTime,
-    puteron_lib::interface::{
-        message::ProcState,
+    puteron::interface::{
+        ipc::ProcState,
         task::{
             Command,
             DependencyType,

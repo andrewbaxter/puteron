@@ -1,5 +1,5 @@
 use {
-    puteron_lib::interface::{
+    puteron::interface::{
         self,
         demon::Config,
         task::Task,
@@ -20,7 +20,7 @@ fn main() {
     create_dir_all(&root).unwrap();
     write(root.join("task.schema.json"), serde_json::to_vec_pretty(&schema_for!(Task)).unwrap()).unwrap();
     write(root.join("config.schema.json"), serde_json::to_vec_pretty(&schema_for!(Config)).unwrap()).unwrap();
-    for (k, v) in interface::message::ipc::to_json_schema() {
+    for (k, v) in interface::ipc::ipc::to_json_schema() {
         write(root.join(format!("ipc_{}.schema.json", k)), serde_json::to_vec_pretty(&v).unwrap()).unwrap();
     }
 }

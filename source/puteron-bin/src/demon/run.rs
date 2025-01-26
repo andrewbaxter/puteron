@@ -31,7 +31,6 @@ use {
                 maybe_get_task,
             },
         },
-        ipc,
         spec::merge_specs,
     },
     aargvark::{
@@ -47,12 +46,15 @@ use {
         Log,
         ResultContext,
     },
-    puteron_lib::interface::{
+    puteron::interface::{
         self,
         demon::Config,
-        message::{
-            self,
-            ipc::ServerResp,
+        ipc::{
+            ipc::{
+                self,
+                ServerResp,
+            },
+            ipc_path,
             RespScheduleEntry,
             TaskDependencyStatus,
             TaskStatus,
@@ -186,7 +188,6 @@ pub(crate) fn main(log: &Log, args: DemonRunArgs) -> Result<(), loga::Error> {
     let rt = runtime::Builder::new_multi_thread().enable_all().build().context("Error starting async runtime")?;
     rt.block_on(async move {
         ta_return!((), loga::Error);
-        let mut schedule_delay;
         let mut schedule_next;
         {
             let mut state_dynamic = state.dynamic.lock().unwrap();
@@ -217,7 +218,7 @@ pub(crate) fn main(log: &Log, args: DemonRunArgs) -> Result<(), loga::Error> {
             populate_schedule(&mut state_dynamic);
 
             // Get initially scheduled task
-            (schedule_delay, schedule_next) = pop_schedule(&mut state_dynamic);
+            schedule_next = pop_schedule(&mut state_dynamic);
         }
 
         // ## Handle ipc + other inputs (signals)
@@ -234,12 +235,11 @@ pub(crate) fn main(log: &Log, args: DemonRunArgs) -> Result<(), loga::Error> {
         }
 
         let mut message_socket;
-        if let Some(ipc_path) = ipc::ipc_path() {
-            message_socket = Some(message::ipc::Server::new(ipc_path).await.map_err(loga::err)?);
+        if let Some(ipc_path) = ipc_path() {
+            message_socket = Some(ipc::Server::new(ipc_path).await.map_err(loga::err)?);
         } else {
             message_socket = None;
         }
-        eprintln!("sleep until schedule delay: {:?}", schedule_delay.duration_since(Instant::now()));
         let mut sigint = Box::pin(sigint.recv());
         let mut sigterm = Box::pin(sigterm.recv());
         loop {
@@ -267,23 +267,31 @@ pub(crate) fn main(log: &Log, args: DemonRunArgs) -> Result<(), loga::Error> {
                 },
                 _ = notify_reschedule.notified() => {
                     let mut state_dynamic = state.dynamic.lock().unwrap();
-                    state_dynamic.schedule.entry(schedule_delay).or_default().push(schedule_next);
-                    (schedule_delay, schedule_next) = pop_schedule(&mut state_dynamic);
+                    if let Some((delay, spec)) = schedule_next {
+                        state_dynamic.schedule.entry(delay).or_default().push(spec);
+                    }
+                    schedule_next = pop_schedule(&mut state_dynamic);
                 },
-                _ = sleep_until(schedule_delay) => {
+                _ = async {
+                    if let Some((delay, _)) = schedule_next.as_ref() {
+                        sleep_until(*delay).await;
+                    }
+                },
+                if schedule_next.is_some() => {
+                    let (_, spec) = schedule_next.unwrap();
                     let mut state_dynamic = state.dynamic.lock().unwrap();
                     log.log_with(
                         loga::DEBUG,
                         "Timer triggered for scheduled task, turning on.",
-                        ea!(task = schedule_next.0, schedule = schedule_next.1.dbg_str()),
+                        ea!(task = spec.0, schedule = spec.1.dbg_str()),
                     );
-                    set_task_user_on(&state, &mut state_dynamic, &schedule_next.0);
+                    set_task_user_on(&state, &mut state_dynamic, &spec.0);
                     state_dynamic
                         .schedule
-                        .entry(schedule::calc_next_instant(Utc::now(), Instant::now(), &schedule_next.1, false))
+                        .entry(schedule::calc_next_instant(Utc::now(), Instant::now(), &spec.1, false))
                         .or_default()
-                        .push(schedule_next);
-                    (schedule_delay, schedule_next) = schedule::pop_schedule(&mut state_dynamic);
+                        .push(spec);
+                    schedule_next = schedule::pop_schedule(&mut state_dynamic);
                 }
             }
         }
@@ -296,7 +304,7 @@ pub(crate) fn main(log: &Log, args: DemonRunArgs) -> Result<(), loga::Error> {
     return Ok(());
 }
 
-async fn handle_ipc(state: Arc<State>, mut conn: message::ipc::ServerConn) {
+async fn handle_ipc(state: Arc<State>, mut conn: ipc::ServerConn) {
     let log = state.log.fork(ea!(sys = "ipc"));
     loop {
         let req = match conn.recv_req().await {
@@ -313,9 +321,9 @@ async fn handle_ipc(state: Arc<State>, mut conn: message::ipc::ServerConn) {
             let state = state.clone();
             let log = log.clone();
             async move {
-                ta_return!(message::ipc::ServerResp, String);
+                ta_return!(ipc::ServerResp, String);
                 match req {
-                    message::ipc::ServerReq::TaskAdd(rr, m) => {
+                    ipc::ServerReq::TaskAdd(rr, m) => {
                         let mut state_dynamic = state.dynamic.lock().unwrap();
 
                         // # Check + delete the old task if it exists
@@ -366,7 +374,7 @@ async fn handle_ipc(state: Arc<State>, mut conn: message::ipc::ServerConn) {
                         }
                         return Ok(rr(()));
                     },
-                    message::ipc::ServerReq::TaskDelete(rr, m) => {
+                    ipc::ServerReq::TaskDelete(rr, m) => {
                         let mut state_dynamic = state.dynamic.lock().unwrap();
                         let Some(task) = maybe_get_task(&state_dynamic, &m.0) else {
                             return Ok(rr(()));
@@ -377,7 +385,7 @@ async fn handle_ipc(state: Arc<State>, mut conn: message::ipc::ServerConn) {
                         delete_task(&mut state_dynamic, &m.0);
                         return Ok(rr(()));
                     },
-                    message::ipc::ServerReq::TaskGetStatus(rr, m) => {
+                    ipc::ServerReq::TaskGetStatus(rr, m) => {
                         let state_dynamic = state.dynamic.lock().unwrap();
                         let Some(task) = maybe_get_task(&state_dynamic, &m.0) else {
                             return Err(format!("Unknown task [{}]", m.0));
@@ -388,22 +396,22 @@ async fn handle_ipc(state: Arc<State>, mut conn: message::ipc::ServerConn) {
                             transitive_on: task.transitive_on.get().0,
                             transitive_on_at: task.transitive_on.get().1,
                             specific: match &task.specific {
-                                TaskStateSpecific::Empty(s) => interface::message::TaskStatusSpecific::Empty(
-                                    interface::message::TaskStatusSpecificEmpty {
+                                TaskStateSpecific::Empty(s) => interface::ipc::TaskStatusSpecific::Empty(
+                                    interface::ipc::TaskStatusSpecificEmpty {
                                         started: s.started.get().0,
                                         started_at: s.started.get().1,
                                     },
                                 ),
-                                TaskStateSpecific::Long(s) => interface::message::TaskStatusSpecific::Long(
-                                    interface::message::TaskStatusSpecificLong {
+                                TaskStateSpecific::Long(s) => interface::ipc::TaskStatusSpecific::Long(
+                                    interface::ipc::TaskStatusSpecificLong {
                                         state: s.state.get().0,
                                         state_at: s.state.get().1,
                                         pid: s.pid.get(),
                                         restarts: s.failed_start_count.get(),
                                     },
                                 ),
-                                TaskStateSpecific::Short(s) => interface::message::TaskStatusSpecific::Short(
-                                    interface::message::TaskStatusSpecificShort {
+                                TaskStateSpecific::Short(s) => interface::ipc::TaskStatusSpecific::Short(
+                                    interface::ipc::TaskStatusSpecificShort {
                                         state: s.state.get().0,
                                         state_at: s.state.get().1,
                                         pid: s.pid.get(),
@@ -413,7 +421,7 @@ async fn handle_ipc(state: Arc<State>, mut conn: message::ipc::ServerConn) {
                             },
                         }));
                     },
-                    message::ipc::ServerReq::TaskGetSpec(rr, m) => {
+                    ipc::ServerReq::TaskGetSpec(rr, m) => {
                         let state_dynamic = state.dynamic.lock().unwrap();
                         let Some(task) = maybe_get_task(&state_dynamic, &m.0) else {
                             return Err(format!("Unknown task [{}]", m.0));
@@ -432,7 +440,7 @@ async fn handle_ipc(state: Arc<State>, mut conn: message::ipc::ServerConn) {
                         }
                         return Ok(rr(out));
                     },
-                    message::ipc::ServerReq::TaskOnOff(rr, m) => {
+                    ipc::ServerReq::TaskOnOff(rr, m) => {
                         let mut state_dynamic = state.dynamic.lock().unwrap();
                         if !state_dynamic.tasks.contains_key(&m.task) {
                             return Err(format!("Unknown task [{}]", m.task));
@@ -445,7 +453,7 @@ async fn handle_ipc(state: Arc<State>, mut conn: message::ipc::ServerConn) {
                             return Ok(rr(()));
                         }
                     },
-                    message::ipc::ServerReq::TaskWaitStarted(rr, m) => {
+                    ipc::ServerReq::TaskWaitStarted(rr, m) => {
                         let (notify_tx, notify_rx) = oneshot::channel();
                         {
                             let state_dynamic = state.dynamic.lock().unwrap();
@@ -463,7 +471,7 @@ async fn handle_ipc(state: Arc<State>, mut conn: message::ipc::ServerConn) {
                             return Err("Start canceled; task is now stopping".to_string());
                         }
                     },
-                    message::ipc::ServerReq::TaskWaitStopped(rr, m) => {
+                    ipc::ServerReq::TaskWaitStopped(rr, m) => {
                         let (notify_tx, notify_rx) = oneshot::channel();
                         {
                             let state_dynamic = state.dynamic.lock().unwrap();
@@ -488,7 +496,7 @@ async fn handle_ipc(state: Arc<State>, mut conn: message::ipc::ServerConn) {
                             },
                         }
                     },
-                    message::ipc::ServerReq::TaskListUserOn(rr, _m) => {
+                    ipc::ServerReq::TaskListUserOn(rr, _m) => {
                         let state_dynamic = state.dynamic.lock().unwrap();
                         let mut out = vec![];
                         for (task_id, state) in &state_dynamic.tasks {
@@ -498,7 +506,7 @@ async fn handle_ipc(state: Arc<State>, mut conn: message::ipc::ServerConn) {
                         }
                         return Ok(rr(out));
                     },
-                    message::ipc::ServerReq::TaskListUpstream(rr, m) => {
+                    ipc::ServerReq::TaskListUpstream(rr, m) => {
                         let state_dynamic = state.dynamic.lock().unwrap();
                         if !state_dynamic.tasks.contains_key(&m.0) {
                             return Err(format!("Unknown task [{}]", m.0));
@@ -537,7 +545,7 @@ async fn handle_ipc(state: Arc<State>, mut conn: message::ipc::ServerConn) {
                         }
                         return Ok(rr(root.unwrap()));
                     },
-                    message::ipc::ServerReq::TaskListDownstream(rr, m) => {
+                    ipc::ServerReq::TaskListDownstream(rr, m) => {
                         let state_dynamic = state.dynamic.lock().unwrap();
                         if !state_dynamic.tasks.contains_key(&m.0) {
                             return Err(format!("Unknown task [{}]", m.0));
@@ -571,7 +579,7 @@ async fn handle_ipc(state: Arc<State>, mut conn: message::ipc::ServerConn) {
                         }
                         return Ok(rr(root.unwrap()));
                     },
-                    message::ipc::ServerReq::DemonListSchedule(rr, _m) => {
+                    ipc::ServerReq::DemonListSchedule(rr, _m) => {
                         let state_dynamic = state.dynamic.lock().unwrap();
                         let instant_now = Instant::now();
                         let now = Utc::now();
@@ -622,10 +630,10 @@ async fn handle_ipc(state: Arc<State>, mut conn: message::ipc::ServerConn) {
                         }
                         return Ok(rr(out));
                     },
-                    message::ipc::ServerReq::DemonEnv(rr, _m) => {
+                    ipc::ServerReq::DemonEnv(rr, _m) => {
                         return Ok(rr(state.env.clone()));
                     },
-                    message::ipc::ServerReq::DemonSpecDirs(rr, _m) => {
+                    ipc::ServerReq::DemonSpecDirs(rr, _m) => {
                         return Ok(rr(state.task_dirs.clone()));
                     },
                 }

@@ -4,10 +4,10 @@ use {
         TaskStateSpecific,
         TaskState_,
     },
-    puteron_lib::interface::{
+    puteron::interface::{
         self,
         base::TaskId,
-        message::{
+        ipc::{
             ProcState,
         },
         task::{

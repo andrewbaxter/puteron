@@ -6,7 +6,7 @@ use {
         Log,
         ResultContext,
     },
-    puteron_lib::interface,
+    puteron::interface,
     std::{
         collections::{
             BTreeMap,
@@ -87,8 +87,11 @@ pub(crate) fn merge_specs(
     let mut tasks = BTreeMap::new();
     for (id, value) in task_json {
         let config =
-            serde_json::from_value::<interface::task::Task>(
-                value.clone(),
+            serde_path_to_error::deserialize::<_, interface::task::Task>(
+                &mut serde_json::Deserializer::from_slice(
+                    // https://github.com/serde-rs/json/issues/1233
+                    &serde_json::to_vec(&value).unwrap(),
+                ),
             ).context_with(
                 "Task has invalid definition",
                 ea!(id = id, config = serde_json::to_string_pretty(&value).unwrap()),

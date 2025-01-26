@@ -8,7 +8,7 @@ use {
         Timelike,
         Utc,
     },
-    puteron_lib::interface::{
+    puteron::interface::{
         self,
         base::TaskId,
     },
@@ -113,8 +113,10 @@ pub(crate) fn populate_schedule(state_dynamic: &mut StateDynamic) {
     }
 }
 
-pub(crate) fn pop_schedule(state_dynamic: &mut StateDynamic) -> (Instant, ScheduleRule) {
-    let mut next_entry = state_dynamic.schedule.first_entry().unwrap();
+pub(crate) fn pop_schedule(state_dynamic: &mut StateDynamic) -> Option<(Instant, ScheduleRule)> {
+    let Some(mut next_entry) = state_dynamic.schedule.first_entry() else {
+        return None;
+    };
     let instant = next_entry.key().clone();
     let next_tasks = next_entry.get_mut();
     let spec = next_tasks.pop().unwrap();
@@ -122,5 +124,5 @@ pub(crate) fn pop_schedule(state_dynamic: &mut StateDynamic) -> (Instant, Schedu
         next_entry.remove();
     }
     state_dynamic.schedule_top = Some((instant, spec.clone()));
-    return (instant, spec);
+    return Some((instant, spec));
 }

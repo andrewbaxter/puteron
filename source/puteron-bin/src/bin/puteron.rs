@@ -4,7 +4,7 @@ use {
         fatal,
         Log,
     },
-    puteron::{
+    puteron_bin::{
         demon,
         task,
     },

@@ -1,5 +1,5 @@
 [package]
-name = "puteron"
+name = "puteron-bin"
 version = "0.1.0"
 edition = "2021"
 publish = false
@@ -20,7 +20,7 @@ tokio = { version = "1", features = [
     "io-util",
     "fs",
 ] }
-puteron-lib = { path = "../puteron-lib" }
+puteron = { path = "../puteron-lib" }
 syslog = "7"
 rustix = { version = "0.38", features = ["process", "fs"] }
 async-pipe = "0.1"
@@ -31,3 +31,4 @@ chrono = "0.4"
 rand = "0.8"
 tokio-util = { version = "0.7", features = ["rt"] }
 schemars = "0.8"
+serde_path_to_error = "0.1"

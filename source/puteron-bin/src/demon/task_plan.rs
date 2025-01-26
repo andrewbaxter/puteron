@@ -20,9 +20,9 @@ use {
         },
     },
     chrono::Utc,
-    puteron_lib::interface::{
+    puteron::interface::{
         base::TaskId,
-        message::ProcState,
+        ipc::ProcState,
         task::DependencyType,
     },
     std::{

@@ -33,11 +33,11 @@ use {
         Log,
         ResultContext,
     },
-    puteron_lib::{
+    puteron::{
         interface::{
             self,
             base::TaskId,
-            message::ProcState,
+            ipc::ProcState,
         },
         time::{
             SimpleDuration,

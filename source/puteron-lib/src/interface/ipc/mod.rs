@@ -18,10 +18,25 @@ use {
         Serialize,
     },
     std::{
-        path::PathBuf,
         collections::HashMap,
+        env,
+        path::PathBuf,
     },
 };
+
+/// Get the default ipc socket path.  Tries environment variable `PUTERON_IPC_SOCK`
+/// for a specific pathname, then `puteron.sock` in `XDG_RUNTIME_DIR`, then
+/// `/run/puteron.sock`. Because of this, when running as root it'll use a global
+/// location, when as a user it'll use the user's session run directory.
+pub fn ipc_path() -> Option<PathBuf> {
+    if let Ok(p) = env::var("PUTERON_IPC_SOCK") {
+        return Some(PathBuf::from(p));
+    }
+    if let Ok(p) = env::var("XDG_RUNTIME_DIR") {
+        return Some(PathBuf::from(p).join("puteron.sock"));
+    }
+    return Some(PathBuf::from("/run/puteron.sock"));
+}
 
 // # Task
 //

@@ -62,11 +62,15 @@ pub struct TaskSpecEmpty {
 #[derive(Serialize, Deserialize, JsonSchema, Clone, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct Command {
+    /// Specify the command working directory. If not specified, the command will be
+    /// launched with the working directory of puteron itself.
     #[serde(default)]
     pub working_directory: Option<PathBuf>,
     #[serde(default)]
     pub environment: Environment,
-    pub command: Vec<String>,
+    /// The command line - program and arguments (as you'd pass to `execve`, so not
+    /// implicitly executed by a shell).
+    pub line: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, PartialEq, Eq)]

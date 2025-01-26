@@ -7,7 +7,7 @@ let
       description = "Enable debug logging";
     };
     environment = lib.mkOption {
-      type = lib.types.attrset;
+      type = lib.types.attrs;
       default = null;
     };
     tasks = lib.mkOption {
@@ -22,7 +22,7 @@ let
       default = { };
       type = lib.types.attrsOf
         (lib.types.oneOf [
-          lib.types.null
+          null
           (lib.types.record {
             contents = {
               oneshot = lib.mkOption {
@@ -34,7 +34,7 @@ let
                 {
                   description = "The unit code considered as a successful exit (default 0)";
                   default = null;
-                  type = lib.types.oneOf [ lib.types.bool lib.types.null ];
+                  type = lib.types.oneOf [ lib.types.bool null ];
                 };
             };
           })
@@ -44,7 +44,7 @@ let
       {
         description = "A map of systemd unit names (with dotted suffix) to a boolean. Where true this will create an `empty` puteron task that is turned on and off to match activation of the corresponding systemd unit. Add the task as a weak upstream of other tasks. Only implemented for `.service`, `.mount`, `.target` at this time. The task name will be in the form `systemd-UNIT-UNITSUFFIX`.";
         default = { };
-        type = lib.types.attrsOf (lib.types.oneOf [ lib.types.bool lib.types.null ]);
+        type = lib.types.attrsOf (lib.types.oneOf [ lib.types.bool null ]);
       };
   };
 in
@@ -67,18 +67,25 @@ in
       };
 
       # Build an options level
-      build = { options, wantedBy }:
+      build = { levelName, options, wantedBy }:
         let
           # The `empty` systemd task name is based on the systemd unit name + suffix
-          mapSystemdTaskName =
-            let mangled = builtins.replaceStrings [ "." "@" ":" ] [ "-" "-" "-" ] name; in "systemd-${mangled}";
+          mapSystemdTaskName = name:
+            let
+              mangled = builtins.replaceStrings [ "." "@" ":" ] [ "-" "-" "-" ] name;
+            in
+            "systemd-${mangled}";
+
+          # Filtered systemd interop lists
+          listenSystemd = lib.attrsets.filterAttrs (name: value: value != null) options.listenSystemd;
+          controlSystemd = (lib.attrsets.filterAttrs (name: value: value != null) options.controlSystemd);
 
           # Defined tasks + generated `empty` tasks for systemd units
           tasks = { }
             // options.tasks
             // (lib.attrsets.mapAttrs'
             (name: value: { name = mapSystemdTaskName name; value = "empty"; })
-            (lib.attrsets.filterAttrs (name: value: value != null) options.listenSystemd))
+            listenSystemd)
             // (lib.attrsets.mapAttrs'
             (name: value: {
               name = mapSystemdTaskName name;
@@ -99,11 +106,11 @@ in
                   };
                 };
             })
-            (lib.attrsets.filterAttrs (name: value: value != null) options.controlSystemd));
+            controlSystemd);
 
           # Build task dir out of tasks
           tasksDir = derivation {
-            name = "${name}-tasks-dir";
+            name = "puteron-${levelName}-tasks-dir";
             system = builtins.currentSystem;
             builder = "${pkgs.python3}/bin/python3";
             args = [
@@ -113,31 +120,17 @@ in
           };
 
           # Build daemon config
-          demonConfig = (pkgs.writeText "${name}-config" (builtins.toJSON (builtins.listToAttrs (
+          demonConfig = (pkgs.writeText "puteron-${levelName}-config" (builtins.toJSON (builtins.listToAttrs (
             [ ]
-            ++ (lib.lists.optional (environment != null) {
+            ++ (lib.lists.optional (options.environment != null) {
               name = "environment";
-              value = environment;
+              value = options.environment;
             })
             ++ [{
               name = "task_dirs";
               value = [ tasksDir "%E/puteron/tasks" ];
             }]
           ))));
-
-          # Validate the config - use this as a dep so that the build will fail if validation has errors
-          validateConfig = derivation {
-            name = "${name}-validate-config";
-            system = builtins.currentSystem;
-            builder = "${pkgs.bash}/bin/bash";
-            args = [
-              (pkgs.writeShellScript "${name}-validate-config-run" ''
-                set -xeu
-                ${config.system.build.puteron_pkg}/bin/puteron demon run ${demonConfig} --validate
-                touch $out
-              '')
-            ];
-          };
 
           # Build hooks for systemd services hooked with `empty` tasks 
           buildSystemdAddons = type:
@@ -149,8 +142,8 @@ in
                 name = lib.strings.removeSuffix suffix name;
                 value =
                   {
-                    serviceConfig.ExecStartPost = "${pkg}/bin/puteron on ${listenSystemdTask name}";
-                    serviceConfig.ExecStopPre = "${pkg}/bin/puteron off ${listenSystemdTask name}";
+                    serviceConfig.ExecStartPost = "${pkg}/bin/puteron on ${mapSystemdTaskName name}";
+                    serviceConfig.ExecStopPre = "${pkg}/bin/puteron off ${mapSystemdTaskName name}";
                   };
               })
               (lib.attrsets.filterAttrs
@@ -158,11 +151,17 @@ in
                 listenSystemd));
         in
         {
-          script = assert "${validateConfig}" != "";
-            lib.concatStringsSep " " ([ ]
-              ++ [ "${pkg}/bin/puteron" "demon" "run" "${demonConfig}" ]
+          script = pkgs.writeTextFile {
+            name = "puteron-${levelName}-script";
+            executable = true;
+            text = (lib.concatStringsSep " " ([ ]
+              ++ [ "/usr/bin/sh" "${pkg}/bin/puteron" "demon" "run" "${demonConfig}" ]
               ++ (lib.lists.optional config.puteron.debug "--debug")
-            );
+            ));
+            checkPhase = ''
+              ${config.system.build.puteron.pkg}/bin/puteron demon run ${demonConfig} --validate
+            '';
+          };
 
           systemdServices = { }
             # Root service
@@ -173,7 +172,7 @@ in
               startLimitIntervalSec = 0;
               serviceConfig.Restart = "on-failure";
               serviceConfig.RestartSec = 60;
-              script = config.system.build.puteronScript;
+              script = "${config.system.build.puteronScript}";
             };
           })
             # Apply `empty` task hooks
@@ -185,24 +184,26 @@ in
 
       # Generate at root + user levels
       root = build {
+        levelName = "root";
         options = config.puteron;
         wantedBy = "multi-user.target";
       };
       user = build {
+        levelName = "user";
         options = config.puteron.user;
         wantedBy = "default.target";
       };
     in
     {
-      system.build.puteronPkg = pkg;
+      system.build.puteron.pkg = pkg;
 
       # Assemble root config
-      system.build.puteronScript = root.script;
+      system.build.puteron.script = root.script;
       systemd.services = root.systemdServices;
       systemd.targets = root.systemdTargets;
 
       # Assemble user config
-      system.build.puteronUserScript = user.script;
+      system.build.puteron.userScript = user.script;
       systemd.user.services = user.systemdServices;
       systemd.user.targets = user.systemdTargets;
     };

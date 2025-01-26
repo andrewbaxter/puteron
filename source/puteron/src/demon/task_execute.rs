@@ -115,8 +115,8 @@ fn spawn_proc(
     spec: &interface::task::Command,
 ) -> Result<(Child, Pid, LoggerRetFuture), loga::Error> {
     // Prep command and args
-    let mut command = Command::new(&spec.command[0]);
-    command.args(&spec.command[1..]);
+    let mut command = Command::new(&spec.line[0]);
+    command.args(&spec.line[1..]);
 
     // Working dir
     match &spec.working_directory {

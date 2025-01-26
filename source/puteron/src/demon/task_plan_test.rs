@@ -144,7 +144,7 @@ fn task_short(
             command: Command {
                 working_directory: Default::default(),
                 environment: Environment::default(),
-                command: Default::default(),
+                line: Default::default(),
             },
             success_codes: Default::default(),
             started_action: Default::default(),
@@ -184,7 +184,7 @@ fn task_long(
             command: Command {
                 working_directory: Default::default(),
                 environment: Environment::default(),
-                command: Default::default(),
+                line: Default::default(),
             },
             started_check: Default::default(),
             restart_delay: Default::default(),

@@ -37,7 +37,7 @@ use {
         interface::{
             self,
             base::TaskId,
-            message::v1::ProcState,
+            message::ProcState,
         },
         time::{
             SimpleDuration,

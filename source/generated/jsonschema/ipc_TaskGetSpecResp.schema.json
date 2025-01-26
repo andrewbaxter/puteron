@@ -1,15 +1,42 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "Request",
+  "title": "Task",
   "oneOf": [
     {
+      "description": "This is a task that has no internal state or process, etc, but can be used as a node in the graph for grouping other tasks (a.k.a. a target or, loosely, a run-level) or to represent the state of some external process (like services managed by systemd).\n\nAn empty task starts immediately and never fails.",
       "type": "object",
       "required": [
-        "v1"
+        "empty"
       ],
       "properties": {
-        "v1": {
-          "$ref": "#/definitions/Request"
+        "empty": {
+          "$ref": "#/definitions/TaskSpecEmpty"
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "description": "A task that continues to run until stopped.\n\nLong tasks are considered started immediately, unless a `start_check` command is provided.",
+      "type": "object",
+      "required": [
+        "long"
+      ],
+      "properties": {
+        "long": {
+          "$ref": "#/definitions/TaskSpecLong"
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "description": "A task that stops on its own (a.k.a one shot).\n\nShort tasks are considered started once they successfully exit.",
+      "type": "object",
+      "required": [
+        "short"
+      ],
+      "properties": {
+        "short": {
+          "$ref": "#/definitions/TaskSpecShort"
         }
       },
       "additionalProperties": false
@@ -19,15 +46,9 @@
     "Command": {
       "type": "object",
       "required": [
-        "command"
+        "line"
       ],
       "properties": {
-        "command": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
         "environment": {
           "default": {
             "add": {},
@@ -40,7 +61,15 @@
             }
           ]
         },
+        "line": {
+          "description": "The command line - program and arguments (as you'd pass to `execve`, so not implicitly executed by a shell).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "working_directory": {
+          "description": "Specify the command working directory. If not specified, the command will be launched with the working directory of puteron itself.",
           "default": null,
           "type": [
             "string",
@@ -106,237 +135,6 @@
     "Month": {
       "type": "string",
       "format": "january|february|march|..."
-    },
-    "Request": {
-      "oneOf": [
-        {
-          "type": "object",
-          "required": [
-            "task_add"
-          ],
-          "properties": {
-            "task_add": {
-              "$ref": "#/definitions/RequestAdd"
-            }
-          },
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "required": [
-            "task_delete"
-          ],
-          "properties": {
-            "task_delete": {
-              "$ref": "#/definitions/RequestTaskDelete"
-            }
-          },
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "required": [
-            "task_get_status"
-          ],
-          "properties": {
-            "task_get_status": {
-              "$ref": "#/definitions/RequestTaskGetStatus"
-            }
-          },
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "required": [
-            "task_get_spec"
-          ],
-          "properties": {
-            "task_get_spec": {
-              "$ref": "#/definitions/RequestTaskGetSpec"
-            }
-          },
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "required": [
-            "task_on"
-          ],
-          "properties": {
-            "task_on": {
-              "$ref": "#/definitions/RequestTaskOn"
-            }
-          },
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "required": [
-            "task_wait_started"
-          ],
-          "properties": {
-            "task_wait_started": {
-              "$ref": "#/definitions/RequestTaskWaitStarted"
-            }
-          },
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "required": [
-            "task_wait_stopped"
-          ],
-          "properties": {
-            "task_wait_stopped": {
-              "$ref": "#/definitions/RequestTaskWaitStopped"
-            }
-          },
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "required": [
-            "task_list_user_on"
-          ],
-          "properties": {
-            "task_list_user_on": {
-              "$ref": "#/definitions/RequestTaskListUserOn"
-            }
-          },
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "required": [
-            "task_list_upstream"
-          ],
-          "properties": {
-            "task_list_upstream": {
-              "$ref": "#/definitions/RequestTaskListUpstream"
-            }
-          },
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "required": [
-            "task_list_downstream"
-          ],
-          "properties": {
-            "task_list_downstream": {
-              "$ref": "#/definitions/RequestTaskListDownstream"
-            }
-          },
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "required": [
-            "demon_env"
-          ],
-          "properties": {
-            "demon_env": {
-              "$ref": "#/definitions/RequestDemonEnv"
-            }
-          },
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "required": [
-            "demon_list_schedule"
-          ],
-          "properties": {
-            "demon_list_schedule": {
-              "$ref": "#/definitions/RequestDemonListSchedule"
-            }
-          },
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "required": [
-            "demon_spec_dirs"
-          ],
-          "properties": {
-            "demon_spec_dirs": {
-              "$ref": "#/definitions/RequestDemonSpecDirs"
-            }
-          },
-          "additionalProperties": false
-        }
-      ]
-    },
-    "RequestAdd": {
-      "type": "object",
-      "required": [
-        "spec",
-        "task",
-        "unique"
-      ],
-      "properties": {
-        "spec": {
-          "$ref": "#/definitions/Task"
-        },
-        "task": {
-          "type": "string"
-        },
-        "unique": {
-          "description": "Error if task already exists.",
-          "type": "boolean"
-        }
-      },
-      "additionalProperties": false
-    },
-    "RequestDemonEnv": {
-      "type": "null"
-    },
-    "RequestDemonListSchedule": {
-      "type": "null"
-    },
-    "RequestDemonSpecDirs": {
-      "type": "object",
-      "additionalProperties": false
-    },
-    "RequestTaskDelete": {
-      "type": "string"
-    },
-    "RequestTaskGetSpec": {
-      "type": "string"
-    },
-    "RequestTaskGetStatus": {
-      "type": "string"
-    },
-    "RequestTaskListDownstream": {
-      "type": "string"
-    },
-    "RequestTaskListUpstream": {
-      "type": "string"
-    },
-    "RequestTaskListUserOn": {
-      "type": "null"
-    },
-    "RequestTaskOn": {
-      "type": "object",
-      "required": [
-        "on",
-        "task"
-      ],
-      "properties": {
-        "on": {
-          "type": "boolean"
-        },
-        "task": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false
-    },
-    "RequestTaskWaitStarted": {
-      "type": "string"
-    },
-    "RequestTaskWaitStopped": {
-      "type": "string"
     },
     "Rule": {
       "oneOf": [
@@ -555,64 +353,16 @@
         }
       ]
     },
-    "Task": {
-      "oneOf": [
-        {
-          "description": "This is a task that has no internal state or process, etc, but can be used as a node in the graph for grouping other tasks (a.k.a. a target or loosely, a run-level).\n\nAn empty task starts immediately and never fails.",
-          "type": "object",
-          "required": [
-            "empty"
-          ],
-          "properties": {
-            "empty": {
-              "$ref": "#/definitions/TaskSpecEmpty"
-            }
-          },
-          "additionalProperties": false
-        },
-        {
-          "description": "A task that continues to run until stopped.\n\nLong tasks are considered started immediately, unless a `start_check` command is provided.",
-          "type": "object",
-          "required": [
-            "long"
-          ],
-          "properties": {
-            "long": {
-              "$ref": "#/definitions/TaskSpecLong"
-            }
-          },
-          "additionalProperties": false
-        },
-        {
-          "description": "A task that stops on its own (a.k.a one shot).\n\nShort tasks are considered started once they successfully exit.",
-          "type": "object",
-          "required": [
-            "short"
-          ],
-          "properties": {
-            "short": {
-              "$ref": "#/definitions/TaskSpecShort"
-            }
-          },
-          "additionalProperties": false
-        },
-        {
-          "description": "An external task is a task where the state is determined by an external process that communicates with puteron via API to communicate state changes.  Since it is externally managed, it can have no dependencies.\n\nWhen the task is set `user_on`, it is immediately also considered `started` (and vice-versa for `user_off`).",
-          "type": "string",
-          "enum": [
-            "external"
-          ]
-        }
-      ]
-    },
     "TaskSpecEmpty": {
       "type": "object",
       "properties": {
         "default_on": {
+          "description": "Sets default on initially when the task is created (ex: at puteron start)",
           "default": false,
           "type": "boolean"
         },
         "upstream": {
+          "description": "Dependencies. All dependencies must be started for this task to start, and if any dependency moves out of the started state this task will stop.",
           "default": {},
           "type": "object",
           "additionalProperties": {
@@ -637,6 +387,7 @@
           ]
         },
         "default_on": {
+          "description": "Sets default on initially when the task is created (ex: at puteron start)",
           "default": false,
           "type": "boolean"
         },
@@ -676,6 +427,7 @@
           ]
         },
         "upstream": {
+          "description": "Dependencies. All dependencies must be started for this task to start, and if any dependency moves out of the started state this task will stop.",
           "default": {},
           "type": "object",
           "additionalProperties": {
@@ -757,6 +509,7 @@
           }
         },
         "upstream": {
+          "description": "Dependencies. All dependencies must be started for this task to start, and if any dependency moves out of the started state this task will stop.",
           "default": {},
           "type": "object",
           "additionalProperties": {

@@ -184,8 +184,7 @@ There's options to do these automatically in the provided nix files.
 
 All control is done via unix-domain stream sockets with 64-bit LE length-framed JSON messages.
 
-- [API request JSON Schema](./source/generated/jsonschema/api_request.schema.json)
-- [API response JSON Schemas](./source/generated/jsonschema)
+[IPC JSON Schemas](./source/generated/jsonschema/)
 
 # Unnecessary details
 

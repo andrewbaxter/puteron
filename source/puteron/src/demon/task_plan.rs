@@ -22,7 +22,7 @@ use {
     chrono::Utc,
     puteron_lib::interface::{
         base::TaskId,
-        message::v1::ProcState,
+        message::ProcState,
         task::DependencyType,
     },
     std::{

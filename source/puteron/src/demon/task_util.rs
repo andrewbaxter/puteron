@@ -7,7 +7,7 @@ use {
     puteron_lib::interface::{
         self,
         base::TaskId,
-        message::v1::{
+        message::{
             ProcState,
         },
         task::{

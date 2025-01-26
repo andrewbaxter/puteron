@@ -1,33 +1,10 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "Result_of_Map_of_TaskDependencyStatus_or_String",
-  "oneOf": [
-    {
-      "type": "object",
-      "required": [
-        "Ok"
-      ],
-      "properties": {
-        "Ok": {
-          "type": "object",
-          "additionalProperties": {
-            "$ref": "#/definitions/TaskDependencyStatus"
-          }
-        }
-      }
-    },
-    {
-      "type": "object",
-      "required": [
-        "Err"
-      ],
-      "properties": {
-        "Err": {
-          "type": "string"
-        }
-      }
-    }
-  ],
+  "title": "Map_of_TaskDependencyStatus",
+  "type": "object",
+  "additionalProperties": {
+    "$ref": "#/definitions/TaskDependencyStatus"
+  },
   "definitions": {
     "DependencyType": {
       "description": "All dependencies will prevent the dependent from starting until they've reached started state, and cause the dependent to stop when they leave started state. Additional behaviors are indicated in this struct.",

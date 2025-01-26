@@ -6,7 +6,7 @@ use {
         Log,
         ResultContext,
     },
-    puteron_lib::interface::message::v1::RequestDemonEnv,
+    puteron_lib::interface::message::RequestDemonEnv,
     run::DemonRunArgs,
     tokio::runtime,
 };
@@ -39,7 +39,7 @@ pub fn main(log: &Log, command: DemonCommands) -> Result<(), loga::Error> {
                 runtime::Builder::new_current_thread().enable_all().build().context("Error starting async runtime")?;
             return rt.block_on(async move {
                 ta_return!((), loga::Error);
-                let status = client_req(RequestDemonEnv).await?.map_err(loga::err)?;
+                let status = client_req(RequestDemonEnv).await?;
                 println!("{}", serde_json::to_string_pretty(&status).unwrap());
                 return Ok(());
             });
@@ -49,7 +49,7 @@ pub fn main(log: &Log, command: DemonCommands) -> Result<(), loga::Error> {
                 runtime::Builder::new_current_thread().enable_all().build().context("Error starting async runtime")?;
             return rt.block_on(async move {
                 ta_return!((), loga::Error);
-                let status = client_req(RequestDemonEnv).await?.map_err(loga::err)?;
+                let status = client_req(RequestDemonEnv).await?;
                 println!("{}", serde_json::to_string_pretty(&status).unwrap());
                 return Ok(());
             });

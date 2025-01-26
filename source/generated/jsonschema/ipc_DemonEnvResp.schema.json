@@ -1,0 +1,8 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Map_of_String",
+  "type": "object",
+  "additionalProperties": {
+    "type": "string"
+  }
+}

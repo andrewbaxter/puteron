@@ -508,6 +508,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "07e28edb80900c19c28f1072f2e8aeca7fa06b23cd4169cefe1af5aa3260783f"
 
 [[package]]
+name = "glove"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "43417cbeb8080aaf082468067ed055ef4dc87d7a1dda7e747b24547cf0989a5b"
+dependencies = [
+ "defer",
+ "libc",
+ "rustix 0.38.42",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tokio 1.42.0",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.14.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -830,9 +845,7 @@ dependencies = [
  "aargvark",
  "async-pipe",
  "chrono",
- "defer",
  "flowcontrol",
- "libc",
  "loga",
  "puteron-lib",
  "rand",
@@ -853,6 +866,7 @@ name = "puteron-lib"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "glove",
  "schemars",
  "serde",
  "structre",

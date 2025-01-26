@@ -17,19 +17,17 @@ use {
         self,
         base::TaskId,
         message::{
-            latest::RequestTaskOn,
-            v1::{
-                RequestAdd,
-                RequestDemonSpecDirs,
-                RequestTaskDelete,
-                RequestTaskGetSpec,
-                RequestTaskGetStatus,
-                RequestTaskListDownstream,
-                RequestTaskListUpstream,
-                RequestTaskListUserOn,
-                RequestTaskWaitStarted,
-                RequestTaskWaitStopped,
-            },
+            RequestTaskOnOff,
+            RequestAdd,
+            RequestDemonSpecDirs,
+            RequestTaskDelete,
+            RequestTaskGetSpec,
+            RequestTaskGetStatus,
+            RequestTaskListDownstream,
+            RequestTaskListUpstream,
+            RequestTaskListUserOn,
+            RequestTaskWaitStarted,
+            RequestTaskWaitStopped,
         },
     },
     tokio::runtime,
@@ -100,10 +98,10 @@ pub fn main(log: &Log, command: TaskCommands) -> Result<(), loga::Error> {
                     task: args.task,
                     spec: args.spec.value,
                     unique: args.unique.is_some(),
-                }).await?.map_err(loga::err)?;
+                }).await?;
             },
             TaskCommands::LoadStored(task_id) => {
-                let dirs = client_req(RequestDemonSpecDirs {}).await?.map_err(loga::err)?;
+                let dirs = client_req(RequestDemonSpecDirs {}).await?;
                 let spec =
                     merge_specs(log, &dirs, Some(&task_id))?
                         .remove(&task_id)
@@ -112,10 +110,10 @@ pub fn main(log: &Log, command: TaskCommands) -> Result<(), loga::Error> {
                     task: task_id,
                     spec,
                     unique: false,
-                }).await?.map_err(loga::err)?;
+                }).await?;
             },
             TaskCommands::PreviewStored(task_id) => {
-                let dirs = client_req(RequestDemonSpecDirs {}).await?.map_err(loga::err)?;
+                let dirs = client_req(RequestDemonSpecDirs {}).await?;
                 let spec =
                     merge_specs(log, &dirs, Some(&task_id))?
                         .remove(&task_id)
@@ -123,56 +121,47 @@ pub fn main(log: &Log, command: TaskCommands) -> Result<(), loga::Error> {
                 println!("{}", serde_json::to_string_pretty(&spec).unwrap());
             },
             TaskCommands::Delete(task_id) => {
-                client_req(RequestTaskDelete(task_id)).await?.map_err(loga::err)?;
+                client_req(RequestTaskDelete(task_id)).await?;
             },
             TaskCommands::Status(task_id) => {
-                let status = client_req(RequestTaskGetStatus(task_id)).await?.map_err(loga::err)?;
+                let status = client_req(RequestTaskGetStatus(task_id)).await?;
                 println!("{}", serde_json::to_string_pretty(&status).unwrap());
             },
             TaskCommands::Spec(task_id) => {
-                let spec = client_req(RequestTaskGetSpec(task_id)).await?.map_err(loga::err)?;
+                let spec = client_req(RequestTaskGetSpec(task_id)).await?;
                 println!("{}", serde_json::to_string_pretty(&spec).unwrap());
             },
             TaskCommands::On(task_id) => {
-                client_req(RequestTaskOn {
+                client_req(RequestTaskOnOff {
                     task: task_id,
                     on: true,
-                }).await?.map_err(loga::err)?;
+                }).await?;
             },
             TaskCommands::Off(task_id) => {
-                client_req(RequestTaskOn {
+                client_req(RequestTaskOnOff {
                     task: task_id,
                     on: false,
-                }).await?.map_err(loga::err)?;
+                }).await?;
             },
             TaskCommands::WaitUntilStarted(task_id) => {
-                client_req(RequestTaskWaitStarted(task_id)).await?.map_err(loga::err)?;
+                client_req(RequestTaskWaitStarted(task_id)).await?;
             },
             TaskCommands::WaitUntilStopped(task_id) => {
-                client_req(RequestTaskWaitStopped(task_id)).await?.map_err(loga::err)?;
+                client_req(RequestTaskWaitStopped(task_id)).await?;
             },
             TaskCommands::ListUserOn => {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(
-                        &client_req(RequestTaskListUserOn).await?.map_err(loga::err)?,
-                    ).unwrap()
-                );
+                println!("{}", serde_json::to_string_pretty(&client_req(RequestTaskListUserOn).await?).unwrap());
             },
             TaskCommands::ListUpstream(task_id) => {
                 println!(
                     "{}",
-                    serde_json::to_string_pretty(
-                        &client_req(RequestTaskListUpstream(task_id)).await?.map_err(loga::err)?,
-                    ).unwrap()
+                    serde_json::to_string_pretty(&client_req(RequestTaskListUpstream(task_id)).await?).unwrap()
                 );
             },
             TaskCommands::ListDownstream(task_id) => {
                 println!(
                     "{}",
-                    serde_json::to_string_pretty(
-                        &client_req(RequestTaskListDownstream(task_id)).await?.map_err(loga::err)?,
-                    ).unwrap()
+                    serde_json::to_string_pretty(&client_req(RequestTaskListDownstream(task_id)).await?).unwrap()
                 );
             },
         }

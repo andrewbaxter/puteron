@@ -25,10 +25,10 @@ use {
             },
             task_util::{
                 get_task,
-                maybe_get_task,
                 is_task_on,
                 is_task_started,
                 is_task_stopped,
+                maybe_get_task,
             },
         },
         ipc,
@@ -50,8 +50,9 @@ use {
     puteron_lib::interface::{
         self,
         demon::Config,
-        message::v1::{
-            RequestTrait,
+        message::{
+            self,
+            ipc::ServerResp,
             RespScheduleEntry,
             TaskDependencyStatus,
             TaskStatus,
@@ -61,28 +62,15 @@ use {
             Task,
         },
     },
-    rustix::{
-        fd::AsFd,
-        fs::flock,
-    },
     std::{
         collections::HashMap,
         env,
-        future::Future,
         sync::{
             Arc,
             Mutex,
         },
     },
     tokio::{
-        fs::{
-            remove_file,
-            File,
-        },
-        net::{
-            UnixListener,
-            UnixStream,
-        },
         runtime,
         select,
         signal::unix::SignalKind,
@@ -245,43 +233,9 @@ pub(crate) fn main(log: &Log, args: DemonRunArgs) -> Result<(), loga::Error> {
             }
         }
 
-        let mut cleanup = vec![];
-        let message_socket;
+        let mut message_socket;
         if let Some(ipc_path) = ipc::ipc_path() {
-            let lock_path = ipc_path.with_extension("lock");
-            let filelock =
-                File::options()
-                    .mode(0o660)
-                    .write(true)
-                    .create(true)
-                    .custom_flags(libc::O_CLOEXEC)
-                    .open(&lock_path)
-                    .await
-                    .context("Error opening IPC lock file")?;
-            flock(
-                filelock.as_fd(),
-                rustix::fs::FlockOperation::NonBlockingLockExclusive,
-            ).context(
-                "Error getting exclusive lock for ipc socket, is another instance using the same socket path?",
-            )?;
-            let _defer = defer::defer(|| {
-                _ = remove_file(&lock_path);
-            });
-            match remove_file(&ipc_path).await {
-                Ok(_) => { },
-                Err(e) => match e.kind() {
-                    std::io::ErrorKind::NotFound => { },
-                    _ => {
-                        return Err(
-                            e,
-                        ).context_with("Error cleaning up old ipc socket", ea!(path = ipc_path.dbg_str()));
-                    },
-                },
-            }
-            message_socket = Some(UnixListener::bind(&ipc_path).context("Error creating control socket")?);
-            cleanup.push(defer::defer(move || {
-                _ = remove_file(&ipc_path);
-            }));
+            message_socket = Some(message::ipc::Server::new(ipc_path).await.map_err(loga::err)?);
         } else {
             message_socket = None;
         }
@@ -300,12 +254,12 @@ pub(crate) fn main(log: &Log, args: DemonRunArgs) -> Result<(), loga::Error> {
                     task_off_all(&state);
                     break;
                 }
-                accepted = message_socket.as_ref().unwrap().accept(),
+                accepted = message_socket.as_mut().unwrap().accept(),
                 if message_socket.is_some() => {
-                    let (stream, _peer) = match accepted {
-                        Ok((stream, peer)) => (stream, peer),
+                    let stream = match accepted {
+                        Ok(x) => x,
                         Err(e) => {
-                            log.log_err(loga::DEBUG, e.context("Error accepting connection"));
+                            log.log_err(loga::DEBUG, loga::err(e).context("Error accepting connection"));
                             continue;
                         },
                     };
@@ -342,309 +296,310 @@ pub(crate) fn main(log: &Log, args: DemonRunArgs) -> Result<(), loga::Error> {
     return Ok(());
 }
 
-async fn handle_ipc(state: Arc<State>, mut conn: UnixStream) {
+async fn handle_ipc(state: Arc<State>, mut conn: message::ipc::ServerConn) {
     let log = state.log.fork(ea!(sys = "ipc"));
     loop {
-        let message = match ipc::read::<interface::message::Request>(&mut conn).await {
+        let req = match conn.recv_req().await {
             Ok(Some(message)) => message,
             Ok(None) => {
                 return;
             },
             Err(e) => {
-                log.log_err(loga::DEBUG, e.context("Error reading message from connection"));
+                log.log_err(loga::DEBUG, loga::err(e).context("Error reading message from connection"));
                 return;
             },
         };
-        match {
+        let resp = {
             let state = state.clone();
             let log = log.clone();
             async move {
-                ta_return!(Vec < u8 >, loga::Error);
+                ta_return!(message::ipc::ServerResp, String);
+                match req {
+                    message::ipc::ServerReq::TaskAdd(rr, m) => {
+                        let mut state_dynamic = state.dynamic.lock().unwrap();
 
-                async fn handle<
-                    I: RequestTrait,
-                    F: Future<Output = I::Response>,
-                >(req: I, cb: impl FnOnce(I) -> F) -> Result<Vec<u8>, loga::Error> {
-                    return Ok(serde_json::to_vec(&cb(req).await).unwrap());
-                }
-
-                match message {
-                    interface::message::Request::V1(m) => match m {
-                        interface::message::v1::Request::TaskAdd(m) => return handle(m, |m| async move {
-                            let mut state_dynamic = state.dynamic.lock().unwrap();
-
-                            // # Check + delete the old task if it exists
-                            if let Some(task) = maybe_get_task(&state_dynamic, &m.task) {
-                                if !m.unique {
-                                    return Err(format!("A task with this ID already exists"));
-                                }
-                                if !is_task_stopped(task) {
-                                    return Err(format!("Task isn't stopped yet"));
-                                }
-                                let same = match (&m.spec, &task.specific) {
-                                    (Task::Empty(new), TaskStateSpecific::Empty(old)) => new == &old.spec,
-                                    (Task::Long(new), TaskStateSpecific::Long(old)) => new == &old.spec,
-                                    (Task::Short(new), TaskStateSpecific::Short(old)) => new == &old.spec,
-                                    _ => false,
-                                };
-                                if same {
-                                    return Ok(());
-                                }
-                                delete_task(&mut state_dynamic, &m.task);
+                        // # Check + delete the old task if it exists
+                        if let Some(task) = maybe_get_task(&state_dynamic, &m.task) {
+                            if !m.unique {
+                                return Err(format!("A task with this ID already exists"));
                             }
-
-                            // # Check new task spec
-                            //
-                            // Check for broken upstreams
-                            let mut errors = vec![];
-                            validate_new_task(&state_dynamic, &mut errors, &m.task, &m.spec);
-                            if !errors.is_empty() {
-                                return Err(
-                                    format!(
-                                        "Task has errors:\n{}",
-                                        errors
-                                            .into_iter()
-                                            .map(|x| format!("- {}", x))
-                                            .collect::<Vec<_>>()
-                                            .join("\n")
-                                    ),
-                                );
-                            }
-
-                            // # Create task
-                            let user_on = match &m.spec {
-                                Task::Empty(s) => s.default_on,
-                                Task::Long(s) => s.default_on,
-                                Task::Short(s) => s.default_on,
-                            };
-                            build_task(&mut state_dynamic, m.task.clone(), m.spec);
-
-                            // # Turn on maybe
-                            if user_on {
-                                set_task_user_on(&state, &mut state_dynamic, &m.task);
-                            }
-                            return Ok(());
-                        }).await,
-                        interface::message::v1::Request::TaskDelete(m) => return handle(m, |m| async move {
-                            let mut state_dynamic = state.dynamic.lock().unwrap();
-                            let Some(task) = maybe_get_task(&state_dynamic, &m.0) else {
-                                return Ok(());
-                            };
-                            if !is_task_stopped(&task) {
+                            if !is_task_stopped(task) {
                                 return Err(format!("Task isn't stopped yet"));
                             }
-                            delete_task(&mut state_dynamic, &m.0);
-                            return Ok(());
-                        }).await,
-                        interface::message::v1::Request::TaskGetStatus(m) => return handle(m, |m| async move {
+                            let same = match (&m.spec, &task.specific) {
+                                (Task::Empty(new), TaskStateSpecific::Empty(old)) => new == &old.spec,
+                                (Task::Long(new), TaskStateSpecific::Long(old)) => new == &old.spec,
+                                (Task::Short(new), TaskStateSpecific::Short(old)) => new == &old.spec,
+                                _ => false,
+                            };
+                            if same {
+                                return Ok(rr(()));
+                            }
+                            delete_task(&mut state_dynamic, &m.task);
+                        }
+
+                        // # Check new task spec
+                        //
+                        // Check for broken upstreams
+                        let mut errors = vec![];
+                        validate_new_task(&state_dynamic, &mut errors, &m.task, &m.spec);
+                        if !errors.is_empty() {
+                            return Err(
+                                format!(
+                                    "Task has errors:\n{}",
+                                    errors.into_iter().map(|x| format!("- {}", x)).collect::<Vec<_>>().join("\n")
+                                ),
+                            );
+                        }
+
+                        // # Create task
+                        let user_on = match &m.spec {
+                            Task::Empty(s) => s.default_on,
+                            Task::Long(s) => s.default_on,
+                            Task::Short(s) => s.default_on,
+                        };
+                        build_task(&mut state_dynamic, m.task.clone(), m.spec);
+
+                        // # Turn on maybe
+                        if user_on {
+                            set_task_user_on(&state, &mut state_dynamic, &m.task);
+                        }
+                        return Ok(rr(()));
+                    },
+                    message::ipc::ServerReq::TaskDelete(rr, m) => {
+                        let mut state_dynamic = state.dynamic.lock().unwrap();
+                        let Some(task) = maybe_get_task(&state_dynamic, &m.0) else {
+                            return Ok(rr(()));
+                        };
+                        if !is_task_stopped(&task) {
+                            return Err(format!("Task isn't stopped yet"));
+                        }
+                        delete_task(&mut state_dynamic, &m.0);
+                        return Ok(rr(()));
+                    },
+                    message::ipc::ServerReq::TaskGetStatus(rr, m) => {
+                        let state_dynamic = state.dynamic.lock().unwrap();
+                        let Some(task) = maybe_get_task(&state_dynamic, &m.0) else {
+                            return Err(format!("Unknown task [{}]", m.0));
+                        };
+                        return Ok(rr(TaskStatus {
+                            direct_on: task.direct_on.get().0,
+                            direct_on_at: task.direct_on.get().1,
+                            transitive_on: task.transitive_on.get().0,
+                            transitive_on_at: task.transitive_on.get().1,
+                            specific: match &task.specific {
+                                TaskStateSpecific::Empty(s) => interface::message::TaskStatusSpecific::Empty(
+                                    interface::message::TaskStatusSpecificEmpty {
+                                        started: s.started.get().0,
+                                        started_at: s.started.get().1,
+                                    },
+                                ),
+                                TaskStateSpecific::Long(s) => interface::message::TaskStatusSpecific::Long(
+                                    interface::message::TaskStatusSpecificLong {
+                                        state: s.state.get().0,
+                                        state_at: s.state.get().1,
+                                        pid: s.pid.get(),
+                                        restarts: s.failed_start_count.get(),
+                                    },
+                                ),
+                                TaskStateSpecific::Short(s) => interface::message::TaskStatusSpecific::Short(
+                                    interface::message::TaskStatusSpecificShort {
+                                        state: s.state.get().0,
+                                        state_at: s.state.get().1,
+                                        pid: s.pid.get(),
+                                        restarts: s.failed_start_count.get(),
+                                    },
+                                ),
+                            },
+                        }));
+                    },
+                    message::ipc::ServerReq::TaskGetSpec(rr, m) => {
+                        let state_dynamic = state.dynamic.lock().unwrap();
+                        let Some(task) = maybe_get_task(&state_dynamic, &m.0) else {
+                            return Err(format!("Unknown task [{}]", m.0));
+                        };
+                        let out;
+                        match &task.specific {
+                            TaskStateSpecific::Empty(s) => {
+                                out = Task::Empty(s.spec.clone());
+                            },
+                            TaskStateSpecific::Long(s) => {
+                                out = Task::Long(s.spec.clone());
+                            },
+                            TaskStateSpecific::Short(s) => {
+                                out = Task::Short(s.spec.clone());
+                            },
+                        }
+                        return Ok(rr(out));
+                    },
+                    message::ipc::ServerReq::TaskOnOff(rr, m) => {
+                        let mut state_dynamic = state.dynamic.lock().unwrap();
+                        if !state_dynamic.tasks.contains_key(&m.task) {
+                            return Err(format!("Unknown task [{}]", m.task));
+                        }
+                        if m.on {
+                            set_task_user_on(&state, &mut state_dynamic, &m.task);
+                            return Ok(rr(()));
+                        } else {
+                            set_task_user_off(&state, &mut state_dynamic, &m.task);
+                            return Ok(rr(()));
+                        }
+                    },
+                    message::ipc::ServerReq::TaskWaitStarted(rr, m) => {
+                        let (notify_tx, notify_rx) = oneshot::channel();
+                        {
                             let state_dynamic = state.dynamic.lock().unwrap();
                             let Some(task) = maybe_get_task(&state_dynamic, &m.0) else {
                                 return Err(format!("Unknown task [{}]", m.0));
                             };
-                            return Ok(TaskStatus {
-                                direct_on: task.direct_on.get().0,
-                                direct_on_at: task.direct_on.get().1,
-                                transitive_on: task.transitive_on.get().0,
-                                transitive_on_at: task.transitive_on.get().1,
-                                specific: match &task.specific {
-                                    TaskStateSpecific::Empty(s) => interface::message::v1::TaskStatusSpecific::Empty(
-                                        interface::message::v1::TaskStatusSpecificEmpty {
-                                            started: s.started.get().0,
-                                            started_at: s.started.get().1,
-                                        },
-                                    ),
-                                    TaskStateSpecific::Long(s) => interface::message::v1::TaskStatusSpecific::Long(
-                                        interface::message::v1::TaskStatusSpecificLong {
-                                            state: s.state.get().0,
-                                            state_at: s.state.get().1,
-                                            pid: s.pid.get(),
-                                            restarts: s.failed_start_count.get(),
-                                        },
-                                    ),
-                                    TaskStateSpecific::Short(s) => interface::message::v1::TaskStatusSpecific::Short(
-                                        interface::message::v1::TaskStatusSpecificShort {
-                                            state: s.state.get().0,
-                                            state_at: s.state.get().1,
-                                            pid: s.pid.get(),
-                                            restarts: s.failed_start_count.get(),
-                                        },
-                                    ),
-                                },
-                            });
-                        }).await,
-                        interface::message::v1::Request::TaskGetSpec(m) => return handle(m, |m| async move {
+                            if is_task_started(task) {
+                                return Ok(rr(()));
+                            }
+                            task.started_waiters.borrow_mut().push(notify_tx);
+                        }
+                        if notify_rx.await.map_err(|e| e.to_string())? {
+                            return Ok(rr(()));
+                        } else {
+                            return Err("Start canceled; task is now stopping".to_string());
+                        }
+                    },
+                    message::ipc::ServerReq::TaskWaitStopped(rr, m) => {
+                        let (notify_tx, notify_rx) = oneshot::channel();
+                        {
                             let state_dynamic = state.dynamic.lock().unwrap();
                             let Some(task) = maybe_get_task(&state_dynamic, &m.0) else {
                                 return Err(format!("Unknown task [{}]", m.0));
                             };
-                            let out;
-                            match &task.specific {
-                                TaskStateSpecific::Empty(s) => {
-                                    out = Task::Empty(s.spec.clone());
-                                },
-                                TaskStateSpecific::Long(s) => {
-                                    out = Task::Long(s.spec.clone());
-                                },
-                                TaskStateSpecific::Short(s) => {
-                                    out = Task::Short(s.spec.clone());
-                                },
+                            if is_task_stopped(task) {
+                                return Ok(rr(()));
                             }
-                            return Ok(out);
-                        }).await,
-                        interface::message::v1::Request::TaskOn(m) => return handle(m, |m| async move {
-                            let mut state_dynamic = state.dynamic.lock().unwrap();
-                            if !state_dynamic.tasks.contains_key(&m.task) {
-                                return Err(format!("Unknown task [{}]", m.task));
+                            task.stopped_waiters.borrow_mut().push(notify_tx);
+                        }
+                        match notify_rx.await {
+                            Ok(res) => {
+                                if res {
+                                    return Ok(rr(()));
+                                } else {
+                                    return Err("Stop canceled; task is now starting".to_string());
+                                }
+                            },
+                            Err(e) => {
+                                return Err(e.to_string());
+                            },
+                        }
+                    },
+                    message::ipc::ServerReq::TaskListUserOn(rr, _m) => {
+                        let state_dynamic = state.dynamic.lock().unwrap();
+                        let mut out = vec![];
+                        for (task_id, state) in &state_dynamic.tasks {
+                            if state_dynamic.task_alloc[*state].direct_on.get().0 {
+                                out.push(task_id.clone());
                             }
-                            if m.on {
-                                set_task_user_on(&state, &mut state_dynamic, &m.task);
-                                return Ok(());
+                        }
+                        return Ok(rr(out));
+                    },
+                    message::ipc::ServerReq::TaskListUpstream(rr, m) => {
+                        let state_dynamic = state.dynamic.lock().unwrap();
+                        if !state_dynamic.tasks.contains_key(&m.0) {
+                            return Err(format!("Unknown task [{}]", m.0));
+                        }
+                        let mut out_stack = vec![];
+                        let mut root = None;
+                        let mut frontier = vec![(true, m.0.clone(), DependencyType::Strong)];
+                        while let Some((first, task_id, dependency_type)) = frontier.pop() {
+                            if first {
+                                frontier.push((false, task_id.clone(), dependency_type));
+                                let push_status;
+                                let task = get_task(&state_dynamic, &task_id);
+                                push_status = TaskDependencyStatus {
+                                    on: is_task_on(task),
+                                    started: is_task_started(task),
+                                    dependency_type: dependency_type,
+                                    related: HashMap::new(),
+                                };
+                                walk_task_upstream(task, |upstream| {
+                                    for (next_id, next_dep_type) in upstream {
+                                        frontier.push((true, next_id.clone(), match dependency_type {
+                                            DependencyType::Strong => *next_dep_type,
+                                            DependencyType::Weak => DependencyType::Weak,
+                                        }));
+                                    }
+                                });
+                                out_stack.push((task_id, push_status));
                             } else {
-                                set_task_user_off(&state, &mut state_dynamic, &m.task);
-                                return Ok(());
-                            }
-                        }).await,
-                        interface::message::v1::Request::TaskWaitStarted(m) => return handle(m, |m| async move {
-                            let (notify_tx, notify_rx) = oneshot::channel();
-                            {
-                                let state_dynamic = state.dynamic.lock().unwrap();
-                                let Some(task) = maybe_get_task(&state_dynamic, &m.0) else {
-                                    return Err(format!("Unknown task [{}]", m.0));
-                                };
-                                if is_task_started(task) {
-                                    return Ok(());
-                                }
-                                task.started_waiters.borrow_mut().push(notify_tx);
-                            }
-                            match notify_rx.await {
-                                Ok(res) => {
-                                    if res {
-                                        return Ok(());
-                                    } else {
-                                        return Err("Start canceled; task is now stopping".to_string());
-                                    }
-                                },
-                                Err(e) => {
-                                    return Err(e.to_string());
-                                },
-                            }
-                        }).await,
-                        interface::message::v1::Request::TaskWaitStopped(m) => return handle(m, |m| async move {
-                            let (notify_tx, notify_rx) = oneshot::channel();
-                            {
-                                let state_dynamic = state.dynamic.lock().unwrap();
-                                let Some(task) = maybe_get_task(&state_dynamic, &m.0) else {
-                                    return Err(format!("Unknown task [{}]", m.0));
-                                };
-                                if is_task_stopped(task) {
-                                    return Ok(());
-                                }
-                                task.stopped_waiters.borrow_mut().push(notify_tx);
-                            }
-                            match notify_rx.await {
-                                Ok(res) => {
-                                    if res {
-                                        return Ok(());
-                                    } else {
-                                        return Err("Stop canceled; task is now starting".to_string());
-                                    }
-                                },
-                                Err(e) => {
-                                    return Err(e.to_string());
-                                },
-                            }
-                        }).await,
-                        interface::message::v1::Request::TaskListUserOn(m) => return handle(m, |_m| async move {
-                            let state_dynamic = state.dynamic.lock().unwrap();
-                            let mut out = vec![];
-                            for (task_id, state) in &state_dynamic.tasks {
-                                if state_dynamic.task_alloc[*state].direct_on.get().0 {
-                                    out.push(task_id.clone());
-                                }
-                            }
-                            return Ok(out);
-                        }).await,
-                        interface::message::v1::Request::TaskListUpstream(m) => return handle(m, |m| async move {
-                            let state_dynamic = state.dynamic.lock().unwrap();
-                            if !state_dynamic.tasks.contains_key(&m.0) {
-                                return Err(format!("Unknown task [{}]", m.0));
-                            }
-                            let mut out_stack = vec![];
-                            let mut root = None;
-                            let mut frontier = vec![(true, m.0.clone(), DependencyType::Strong)];
-                            while let Some((first, task_id, dependency_type)) = frontier.pop() {
-                                if first {
-                                    frontier.push((false, task_id.clone(), dependency_type));
-                                    let push_status;
-                                    let task = get_task(&state_dynamic, &task_id);
-                                    push_status = TaskDependencyStatus {
-                                        on: is_task_on(task),
-                                        started: is_task_started(task),
-                                        dependency_type: dependency_type,
-                                        related: HashMap::new(),
-                                    };
-                                    walk_task_upstream(task, |upstream| {
-                                        for (next_id, next_dep_type) in upstream {
-                                            frontier.push((true, next_id.clone(), match dependency_type {
-                                                DependencyType::Strong => *next_dep_type,
-                                                DependencyType::Weak => DependencyType::Weak,
-                                            }));
-                                        }
-                                    });
-                                    out_stack.push((task_id, push_status));
+                                let (top_id, top) = out_stack.pop().unwrap();
+                                if let Some(parent) = out_stack.last_mut() {
+                                    parent.1.related.insert(top_id, top);
                                 } else {
-                                    let (top_id, top) = out_stack.pop().unwrap();
-                                    if let Some(parent) = out_stack.last_mut() {
-                                        parent.1.related.insert(top_id, top);
-                                    } else {
-                                        root = Some(top.related);
-                                    }
+                                    root = Some(top.related);
                                 }
                             }
-                            return Ok(root.unwrap());
-                        }).await,
-                        interface::message::v1::Request::TaskListDownstream(m) => return handle(m, |m| async move {
-                            let state_dynamic = state.dynamic.lock().unwrap();
-                            if !state_dynamic.tasks.contains_key(&m.0) {
-                                return Err(format!("Unknown task [{}]", m.0));
-                            }
-                            let mut out_stack = vec![];
-                            let mut root = None;
-                            let mut frontier = vec![(true, m.0.clone(), DependencyType::Strong)];
-                            while let Some((first, task_id, dependency_type)) = frontier.pop() {
-                                if first {
-                                    frontier.push((false, task_id.clone(), dependency_type));
-                                    let push_status;
-                                    let task = get_task(&state_dynamic, &task_id);
-                                    push_status = TaskDependencyStatus {
-                                        on: is_task_on(task),
-                                        started: is_task_started(task),
-                                        dependency_type: dependency_type,
-                                        related: HashMap::new(),
-                                    };
-                                    for (down_id, down_type) in task.downstream.borrow().iter() {
-                                        frontier.push((true, down_id.clone(), *down_type));
-                                    }
-                                    out_stack.push((task_id, push_status));
+                        }
+                        return Ok(rr(root.unwrap()));
+                    },
+                    message::ipc::ServerReq::TaskListDownstream(rr, m) => {
+                        let state_dynamic = state.dynamic.lock().unwrap();
+                        if !state_dynamic.tasks.contains_key(&m.0) {
+                            return Err(format!("Unknown task [{}]", m.0));
+                        }
+                        let mut out_stack = vec![];
+                        let mut root = None;
+                        let mut frontier = vec![(true, m.0.clone(), DependencyType::Strong)];
+                        while let Some((first, task_id, dependency_type)) = frontier.pop() {
+                            if first {
+                                frontier.push((false, task_id.clone(), dependency_type));
+                                let push_status;
+                                let task = get_task(&state_dynamic, &task_id);
+                                push_status = TaskDependencyStatus {
+                                    on: is_task_on(task),
+                                    started: is_task_started(task),
+                                    dependency_type: dependency_type,
+                                    related: HashMap::new(),
+                                };
+                                for (down_id, down_type) in task.downstream.borrow().iter() {
+                                    frontier.push((true, down_id.clone(), *down_type));
+                                }
+                                out_stack.push((task_id, push_status));
+                            } else {
+                                let (top_id, top) = out_stack.pop().unwrap();
+                                if let Some(parent) = out_stack.last_mut() {
+                                    parent.1.related.insert(top_id, top);
                                 } else {
-                                    let (top_id, top) = out_stack.pop().unwrap();
-                                    if let Some(parent) = out_stack.last_mut() {
-                                        parent.1.related.insert(top_id, top);
-                                    } else {
-                                        root = Some(top.related);
-                                    }
+                                    root = Some(top.related);
                                 }
                             }
-                            return Ok(root.unwrap());
-                        }).await,
-                        interface::message::v1::Request::DemonListSchedule(m) => return handle(m, |_m| async {
-                            let state_dynamic = state.dynamic.lock().unwrap();
-                            let instant_now = Instant::now();
-                            let now = Utc::now();
-                            let mut out = vec![];
-                            out.reserve(state_dynamic.schedule.len() + 1);
-                            #[allow(for_loops_over_fallibles)]
-                            for (at, entry) in &state_dynamic.schedule_top {
+                        }
+                        return Ok(rr(root.unwrap()));
+                    },
+                    message::ipc::ServerReq::DemonListSchedule(rr, _m) => {
+                        let state_dynamic = state.dynamic.lock().unwrap();
+                        let instant_now = Instant::now();
+                        let now = Utc::now();
+                        let mut out = vec![];
+                        out.reserve(state_dynamic.schedule.len() + 1);
+                        #[allow(for_loops_over_fallibles)]
+                        for (at, entry) in &state_dynamic.schedule_top {
+                            let at_secs: i64 = match at.duration_since(instant_now).as_secs().try_into() {
+                                Ok(s) => s,
+                                Err(e) => {
+                                    log.log_err(
+                                        loga::WARN,
+                                        e.context_with(
+                                            "Schedule entry out of i64 range for chrono IPC response",
+                                            ea!(task = entry.0, rule = entry.1.dbg_str()),
+                                        ),
+                                    );
+                                    continue;
+                                },
+                            };
+                            out.push(RespScheduleEntry {
+                                at: now + chrono::Duration::seconds(at_secs),
+                                task: entry.0.clone(),
+                                rule: entry.1.clone(),
+                            });
+                        }
+                        for (at, entries) in &state_dynamic.schedule {
+                            for entry in entries {
                                 let at_secs: i64 = match at.duration_since(instant_now).as_secs().try_into() {
                                     Ok(s) => s,
                                     Err(e) => {
@@ -664,50 +619,22 @@ async fn handle_ipc(state: Arc<State>, mut conn: UnixStream) {
                                     rule: entry.1.clone(),
                                 });
                             }
-                            for (at, entries) in &state_dynamic.schedule {
-                                for entry in entries {
-                                    let at_secs: i64 = match at.duration_since(instant_now).as_secs().try_into() {
-                                        Ok(s) => s,
-                                        Err(e) => {
-                                            log.log_err(
-                                                loga::WARN,
-                                                e.context_with(
-                                                    "Schedule entry out of i64 range for chrono IPC response",
-                                                    ea!(task = entry.0, rule = entry.1.dbg_str()),
-                                                ),
-                                            );
-                                            continue;
-                                        },
-                                    };
-                                    out.push(RespScheduleEntry {
-                                        at: now + chrono::Duration::seconds(at_secs),
-                                        task: entry.0.clone(),
-                                        rule: entry.1.clone(),
-                                    });
-                                }
-                            }
-                            return Ok(out);
-                        }).await,
-                        interface::message::v1::Request::DemonEnv(m) => return handle(m, |_m| async {
-                            return Ok(state.env.clone());
-                        }).await,
-                        interface::message::v1::Request::DemonSpecDirs(m) => return handle(m, |_m| async {
-                            return Ok(state.task_dirs.clone());
-                        }).await,
+                        }
+                        return Ok(rr(out));
+                    },
+                    message::ipc::ServerReq::DemonEnv(rr, _m) => {
+                        return Ok(rr(state.env.clone()));
+                    },
+                    message::ipc::ServerReq::DemonSpecDirs(rr, _m) => {
+                        return Ok(rr(state.task_dirs.clone()));
                     },
                 }
             }
-        }.await {
-            Ok(body) => {
-                match ipc::write(&mut conn, &body).await {
-                    Ok(_) => { },
-                    Err(e) => {
-                        log.log_err(loga::DEBUG, e.context("Error writing response"));
-                    },
-                }
-            },
+        }.await.unwrap_or_else(ServerResp::err);
+        match conn.send_resp(resp).await {
+            Ok(_) => { },
             Err(e) => {
-                log.log_err(loga::DEBUG, e.context("Error handling message"));
+                log.log_err(loga::DEBUG, loga::err(e).context("Error writing response"));
             },
         }
     }

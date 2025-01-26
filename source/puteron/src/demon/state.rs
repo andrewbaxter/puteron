@@ -11,7 +11,7 @@ use {
     puteron_lib::interface::{
         self,
         base::TaskId,
-        message::v1::ProcState,
+        message::ProcState,
         task::DependencyType,
     },
     slotmap::{

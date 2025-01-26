@@ -30,7 +30,7 @@ use {
     },
     chrono::DateTime,
     puteron_lib::interface::{
-        message::v1::ProcState,
+        message::ProcState,
         task::{
             Command,
             DependencyType,

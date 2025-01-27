@@ -150,7 +150,7 @@ pub struct TaskSpecShort {
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
+#[serde(rename_all = "snake_case", deny_unknown_fields, tag = "type")]
 pub enum Task {
     /// This is a task that has no internal state or process, etc, but can be used as a
     /// node in the graph for grouping other tasks (a.k.a. a target or, loosely, a

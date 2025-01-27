@@ -337,11 +337,27 @@
           "description": "This is a task that has no internal state or process, etc, but can be used as a node in the graph for grouping other tasks (a.k.a. a target or, loosely, a run-level) or to represent the state of some external process (like services managed by systemd).\n\nAn empty task starts immediately and never fails.",
           "type": "object",
           "required": [
-            "empty"
+            "type"
           ],
           "properties": {
-            "empty": {
-              "$ref": "#/definitions/TaskSpecEmpty"
+            "default_on": {
+              "description": "Sets default on initially when the task is created (ex: at puteron start)",
+              "default": false,
+              "type": "boolean"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "empty"
+              ]
+            },
+            "upstream": {
+              "description": "Dependencies. All dependencies must be started for this task to start, and if any dependency moves out of the started state this task will stop.",
+              "default": {},
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/definitions/DependencyType"
+              }
             }
           },
           "additionalProperties": false
@@ -350,11 +366,71 @@
           "description": "A task that continues to run until stopped.\n\nLong tasks are considered started immediately, unless a `start_check` command is provided.",
           "type": "object",
           "required": [
-            "long"
+            "command",
+            "type"
           ],
           "properties": {
-            "long": {
-              "$ref": "#/definitions/TaskSpecLong"
+            "command": {
+              "description": "Command to run",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/Command"
+                }
+              ]
+            },
+            "default_on": {
+              "description": "Sets default on initially when the task is created (ex: at puteron start)",
+              "default": false,
+              "type": "boolean"
+            },
+            "restart_delay": {
+              "description": "How long to wait between restarts when the command fails. Defaults to 60s.",
+              "default": null,
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Duration"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "started_check": {
+              "description": "How to determine if command has started - otherwise immediately transition to started from starting.",
+              "default": null,
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/StartedCheck"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "stop_timeout": {
+              "description": "How long to wait before force killing the process if it fails to stop. Defaults to 30s.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Duration"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "long"
+              ]
+            },
+            "upstream": {
+              "description": "Dependencies. All dependencies must be started for this task to start, and if any dependency moves out of the started state this task will stop.",
+              "default": {},
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/definitions/DependencyType"
+              }
             }
           },
           "additionalProperties": false
@@ -363,182 +439,93 @@
           "description": "A task that stops on its own (a.k.a one shot).\n\nShort tasks are considered started once they successfully exit.",
           "type": "object",
           "required": [
-            "short"
+            "command",
+            "type"
           ],
           "properties": {
-            "short": {
-              "$ref": "#/definitions/TaskSpecShort"
+            "command": {
+              "description": "Command to run",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/Command"
+                }
+              ]
+            },
+            "default_on": {
+              "description": "Turn the task on as soon as it is loaded",
+              "default": false,
+              "type": "boolean"
+            },
+            "restart_delay": {
+              "description": "How long to wait between restarts when the command exits. Defaults to 60s.",
+              "default": null,
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Duration"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "schedule": {
+              "description": "Turn the task on on a schedule",
+              "default": [],
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/Rule"
+              }
+            },
+            "started_action": {
+              "description": "What to do when the command succeeds",
+              "default": null,
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ShortTaskStartedAction"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "stop_timeout": {
+              "description": "How long to wait before force killing the process if it fails to stop. Defaults to 30s.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Duration"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "success_codes": {
+              "description": "Which exit codes are considered success.  By default, `0`.",
+              "default": [],
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "format": "int32"
+              }
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "short"
+              ]
+            },
+            "upstream": {
+              "description": "Dependencies. All dependencies must be started for this task to start, and if any dependency moves out of the started state this task will stop.",
+              "default": {},
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/definitions/DependencyType"
+              }
             }
           },
           "additionalProperties": false
         }
       ]
-    },
-    "TaskSpecEmpty": {
-      "type": "object",
-      "properties": {
-        "default_on": {
-          "description": "Sets default on initially when the task is created (ex: at puteron start)",
-          "default": false,
-          "type": "boolean"
-        },
-        "upstream": {
-          "description": "Dependencies. All dependencies must be started for this task to start, and if any dependency moves out of the started state this task will stop.",
-          "default": {},
-          "type": "object",
-          "additionalProperties": {
-            "$ref": "#/definitions/DependencyType"
-          }
-        }
-      },
-      "additionalProperties": false
-    },
-    "TaskSpecLong": {
-      "type": "object",
-      "required": [
-        "command"
-      ],
-      "properties": {
-        "command": {
-          "description": "Command to run",
-          "allOf": [
-            {
-              "$ref": "#/definitions/Command"
-            }
-          ]
-        },
-        "default_on": {
-          "description": "Sets default on initially when the task is created (ex: at puteron start)",
-          "default": false,
-          "type": "boolean"
-        },
-        "restart_delay": {
-          "description": "How long to wait between restarts when the command fails. Defaults to 60s.",
-          "default": null,
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Duration"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "started_check": {
-          "description": "How to determine if command has started - otherwise immediately transition to started from starting.",
-          "default": null,
-          "anyOf": [
-            {
-              "$ref": "#/definitions/StartedCheck"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "stop_timeout": {
-          "description": "How long to wait before force killing the process if it fails to stop. Defaults to 30s.",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Duration"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "upstream": {
-          "description": "Dependencies. All dependencies must be started for this task to start, and if any dependency moves out of the started state this task will stop.",
-          "default": {},
-          "type": "object",
-          "additionalProperties": {
-            "$ref": "#/definitions/DependencyType"
-          }
-        }
-      },
-      "additionalProperties": false
-    },
-    "TaskSpecShort": {
-      "type": "object",
-      "required": [
-        "command"
-      ],
-      "properties": {
-        "command": {
-          "description": "Command to run",
-          "allOf": [
-            {
-              "$ref": "#/definitions/Command"
-            }
-          ]
-        },
-        "default_on": {
-          "description": "Turn the task on as soon as it is loaded",
-          "default": false,
-          "type": "boolean"
-        },
-        "restart_delay": {
-          "description": "How long to wait between restarts when the command exits. Defaults to 60s.",
-          "default": null,
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Duration"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "schedule": {
-          "description": "Turn the task on on a schedule",
-          "default": [],
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/Rule"
-          }
-        },
-        "started_action": {
-          "description": "What to do when the command succeeds",
-          "default": null,
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ShortTaskStartedAction"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "stop_timeout": {
-          "description": "How long to wait before force killing the process if it fails to stop. Defaults to 30s.",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Duration"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "success_codes": {
-          "description": "Which exit codes are considered success.  By default, `0`.",
-          "default": [],
-          "type": "array",
-          "items": {
-            "type": "integer",
-            "format": "int32"
-          }
-        },
-        "upstream": {
-          "description": "Dependencies. All dependencies must be started for this task to start, and if any dependency moves out of the started state this task will stop.",
-          "default": {},
-          "type": "object",
-          "additionalProperties": {
-            "$ref": "#/definitions/DependencyType"
-          }
-        }
-      },
-      "additionalProperties": false
     }
   }
 }

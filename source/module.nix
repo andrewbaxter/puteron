@@ -92,21 +92,19 @@ in
               value =
                 if value.oneshot
                 then {
-                  "short" = {
-                    command = {
-                      line = [ ]
-                        ++ [ "${pkg}/bin/puteron-control-systemd" "--oneshot" ]
-                        ++ (lib.lists.optional (value.exitCode != null) [ "--exit-code" "${builtins.toString value.exitCode}" ]);
-                    };
+                  type = "short";
+                  command = {
+                    line = [ ]
+                      ++ [ "${pkg}/bin/puteron-control-systemd" "--oneshot" ]
+                      ++ (lib.lists.optional (value.exitCode != null) [ "--exit-code" "${builtins.toString value.exitCode}" ]);
                   };
                 }
                 else {
-                  "long" = {
-                    command = {
-                      line = [ ]
-                        ++ [ "${pkg}/bin/puteron-control-systemd" ]
-                        ++ (lib.lists.optional (value.exitCode != null) [ "--exit-code" "${builtins.toString value.exitCode}" ]);
-                    };
+                  type = "long";
+                  command = {
+                    line = [ ]
+                      ++ [ "${pkg}/bin/puteron-control-systemd" ]
+                      ++ (lib.lists.optional (value.exitCode != null) [ "--exit-code" "${builtins.toString value.exitCode}" ]);
                   };
                 };
             })

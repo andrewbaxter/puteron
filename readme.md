@@ -78,9 +78,9 @@ Nix definitions are provided in
 
 - `source/package.nix` - just the derivation to build the binary
 
-- `source/module.nix` - Nice, type-checked configs via `config.puteron = { ... }`. Sets `puteron` up as a systemd unit.
+- `source/module.nix` - Sets up `puteron` as a systemd unit and allows configuration via `config.puteron`, plus shortcuts for systemd interop (listening and control via puteron tasks).
 
-  It closely follows the JSON schema, so refer to that for config details.
+  Each entry in `config.puteron.tasks.*` is directly translated to JSON so you can use the same format for that, or deserialize from actual JSON directly.
 
 You can use it by doing
 
@@ -105,6 +105,7 @@ An example config: `config.json`
 
 ```json
 {
+  "$schema": "https://raw.githubusercontent.com/andrewbaxter/puteron/refs/heads/master/source/generated/jsonschema/config.schema.json",
   "environment": {
     "keep": {
       "XDG_RUNTIME_DIR": true
@@ -113,6 +114,8 @@ An example config: `config.json`
   "task_dirs": ["/path/to/my/tasks/dir"]
 }
 ```
+
+(Specifying the schema is optional but will make VS Code provide autocomplete and check the config as you write it.)
 
 I kept the `XDG_RUNTIME_DIR` env var since that's used to determine the path for `puteron` IPC for running `puteron` commands in tasks (see the backup task below). This allows me to use the same config as root (home server) or as a user (local testing).
 
@@ -124,6 +127,8 @@ An example task: `sunwet.json`
 
 ```json
 {
+  "$schema": "https://raw.githubusercontent.com/andrewbaxter/puteron/refs/heads/master/source/generated/jsonschema/task.schema.json",
+  "type": "long",
   "upstream": {
     "fdap-oidc": "strong",
     "openfdap": "strong",
@@ -140,10 +145,13 @@ An example task: `sunwet.json`
 }
 ```
 
+(Specifying the schema is optional but will make VS Code provide autocomplete and check the config as you write it.)
+
 An exampled scheduled task: `backup_b2.json`
 
 ```json
 {
+  "type": "short",
   "command": {
     "command": ["/path/to/backup/script"]
   },

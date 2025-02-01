@@ -107,6 +107,7 @@ fn task_empty(
     return task(id, TaskStateSpecific::Empty(TaskStateEmpty {
         started: Cell::new((started, DateTime::UNIX_EPOCH)),
         spec: TaskSpecEmpty {
+            _schema: Default::default(),
             default_on: started,
             upstream: upstream.into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
         },
@@ -138,6 +139,7 @@ fn task_short(
             ProcState::Stopping | ProcState::Stopped => RefCell::new(None),
         },
         spec: TaskSpecShort {
+            _schema: Default::default(),
             default_on: on,
             upstream: upstream.as_ref().into_iter().map(|(k, v)| (k.to_string(), *v)).collect(),
             schedule: Default::default(),
@@ -179,6 +181,7 @@ fn task_long(
             ProcState::Stopping | ProcState::Stopped => RefCell::new(None),
         },
         spec: TaskSpecLong {
+            _schema: Default::default(),
             default_on: on,
             upstream: upstream.as_ref().into_iter().map(|(k, v)| (k.to_string(), *v)).collect(),
             command: Command {

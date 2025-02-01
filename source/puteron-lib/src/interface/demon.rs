@@ -29,6 +29,8 @@ pub struct Environment {
 #[derive(Serialize, Deserialize, Clone, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct Config {
+    #[serde(rename = "$schema")]
+    pub _schema: Option<String>,
     #[serde(default)]
     pub environment: Environment,
     #[serde(default)]

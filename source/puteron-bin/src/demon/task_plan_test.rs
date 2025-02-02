@@ -1,4 +1,5 @@
 #![cfg(test)]
+
 //! Notes:
 //!
 //! * Test setup sets on and transitive on. It sets started/state if it's stopped but

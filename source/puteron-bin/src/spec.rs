@@ -12,20 +12,20 @@ use {
             BTreeMap,
             HashMap,
         },
-        fs::read_dir,
         io::ErrorKind,
         path::PathBuf,
     },
+    tokio::fs::read_dir,
 };
 
-pub(crate) fn merge_specs(
+pub async fn merge_specs(
     log: &Log,
     dirs: &[PathBuf],
     filter: Option<&str>,
 ) -> Result<BTreeMap<String, interface::task::Task>, loga::Error> {
     let mut task_json = HashMap::new();
     for dir in dirs {
-        let dir_entries = match read_dir(&dir) {
+        let mut dir_entries = match read_dir(&dir).await {
             Ok(e) => e,
             Err(e) => {
                 if e.kind() == ErrorKind::NotFound {
@@ -38,8 +38,7 @@ pub(crate) fn merge_specs(
             },
         };
         let mut dir_entries1 = vec![];
-        for e in dir_entries {
-            let e = e.context("Error reading task directory entry")?;
+        while let Some(e) = dir_entries.next_entry().await.context("Error reading task directory entry")? {
             dir_entries1.push(e);
         }
         dir_entries1.sort_by_cached_key(|k| k.file_name());

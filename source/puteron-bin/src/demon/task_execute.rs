@@ -139,7 +139,7 @@ fn spawn_proc(
         command.env(k, v);
     }
     let log = state.log.fork(ea!(command = command.dbg_str()));
-    log.log(loga::DEBUG, "Spawning task process");
+    log.log_with(loga::DEBUG, "Spawning task process", ea!(task = task_id));
 
     // Stdout/err -> syslog 1
     command.stderr(Stdio::piped());
@@ -349,9 +349,7 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                                     }
 
                                     // Do nothing forever
-                                    loop {
-                                        sleep(Duration::MAX).await;
-                                    }
+                                    std::future::pending::<()>().await;
                                 };
 
                                 // Wait until event
@@ -403,6 +401,7 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                                             let TaskStateSpecific::Long(specific) = &task.specific else {
                                                 panic!();
                                             };
+                                            specific.pid.set(None);
                                             specific.state.set((ProcState::Starting, Utc::now()));
                                         }
                                         return Ok(false);

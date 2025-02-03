@@ -30,7 +30,7 @@ use {
     },
 };
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub(crate) struct ExecutePlan {
     pub(crate) log_starting: HashSet<TaskId>,
     pub(crate) log_stopping: HashSet<TaskId>,
@@ -192,85 +192,53 @@ pub(crate) fn plan_set_task_direct_on(state_dynamic: &StateDynamic, plan: &mut E
 }
 
 pub(crate) fn plan_set_task_direct_off(state_dynamic: &StateDynamic, plan: &mut ExecutePlan, task_id: &TaskId) {
-    // Update on flags and check if the effective `on` state has changed
-    {
-        let task = get_task(state_dynamic, &task_id);
-        let was_off = !is_task_on(&task);
-        if was_off {
-            return;
-        }
+    let task = get_task(state_dynamic, &task_id);
+    if task.direct_on.get().0 {
         task.direct_on.set((false, Utc::now()));
-        if task.transitive_on.get().0 {
-            return;
-        }
+    }
+    if task.transitive_on.get().0 {
+        return;
     }
 
     // Unset transitive_on for strong upstream deps
     propagate_transitive_off(state_dynamic, task_id);
 
     // Stop weak downstream tasks starting from leaves to current task
-    let stopped;
     {
-        let mut frontier = vec![(true, task_id.clone())];
-        let mut all_downstream_stopped_stack = vec![true];
-        while let Some((first_pass, downstream_id)) = frontier.pop() {
+        let mut frontier = vec![];
+        for (k, v) in task.downstream.borrow().iter() {
+            frontier.push((true, k.clone(), *v));
+        }
+        while let Some((first_pass, downstream_id, downstream_type)) = frontier.pop() {
             if first_pass {
                 let downstream_task = get_task(state_dynamic, &downstream_id);
-
-                fn can_stop_task(task: &TaskState_) -> bool {
-                    if is_task_stopped(task) {
-                        return false;
-                    }
-                    match &task.specific {
-                        TaskStateSpecific::Empty(_) => {
-                            return true;
-                        },
-                        TaskStateSpecific::Long(specific) => {
-                            return specific.stop.borrow().is_some();
-                        },
-                        TaskStateSpecific::Short(specific) => {
-                            if specific.state.get().0 == ProcState::Started {
-                                return true;
-                            }
-                            return specific.stop.borrow().is_some();
-                        },
-                    }
+                match downstream_type {
+                    DependencyType::Strong => {
+                        if is_task_on(&downstream_task) {
+                            continue;
+                        }
+                    },
+                    DependencyType::Weak => { },
                 }
-
-                if !can_stop_task(&downstream_task) {
-                    // Already stopping, nothing to do
+                if is_task_stopped(&downstream_task) {
                     continue;
                 }
-                frontier.push((false, downstream_id.clone()));
+                frontier.push((false, downstream_id.clone(), downstream_type));
 
                 // Descend
-                all_downstream_stopped_stack.push(true);
                 for (k, v) in downstream_task.downstream.borrow().iter() {
-                    match *v {
-                        DependencyType::Strong => {
-                            // Must already be off for this to be transitively off
-                            continue;
-                        },
-                        DependencyType::Weak => { },
-                    }
-                    frontier.push((true, k.clone()));
+                    frontier.push((true, k.clone(), *v));
                 }
             } else {
                 // Stop if possible
                 let downstream_task = get_task(state_dynamic, &downstream_id);
-                let all_downstream_stopped = all_downstream_stopped_stack.pop().unwrap();
-                let parent_all_downstream_stopped = all_downstream_stopped_stack.last_mut().unwrap();
-                if all_downstream_stopped {
-                    if !plan_stop_task(state_dynamic, plan, &downstream_task) {
-                        *parent_all_downstream_stopped = false;
-                    }
-                } else {
-                    *parent_all_downstream_stopped = false;
-                }
+                plan_stop_task(state_dynamic, plan, &downstream_task);
             }
         }
-        stopped = all_downstream_stopped_stack.pop().unwrap();
     }
+
+    // Stop this task
+    let stopped = plan_stop_task(state_dynamic, plan, &task);
 
     // Stop upstream if this is already stopped
     if stopped {
@@ -359,13 +327,7 @@ fn propagate_stop_upstream(state_dynamic: &StateDynamic, plan: &mut ExecutePlan,
 
     fn push_upstream(frontier: &mut Vec<TaskId>, task: &TaskState_) {
         walk_task_upstream(task, |upstream| {
-            for (up_id, up_dep_type) in upstream {
-                match up_dep_type {
-                    DependencyType::Strong => { },
-                    DependencyType::Weak => {
-                        continue;
-                    },
-                }
+            for (up_id, _) in upstream {
                 frontier.push(up_id.clone());
             }
         });

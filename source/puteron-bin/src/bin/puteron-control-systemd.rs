@@ -3,6 +3,7 @@ use {
         vark,
         Aargvark,
     },
+    flowcontrol::ta_return,
     loga::{
         ea,
         fatal,
@@ -14,14 +15,17 @@ use {
         process::{
             waitpid,
             WaitOptions,
+            WaitStatus,
         },
         termios::Pid,
     },
+    std::time::Duration,
     tokio::{
         process::Command,
         select,
         signal::unix::SignalKind,
         task::spawn_blocking,
+        time::sleep,
     },
 };
 
@@ -47,36 +51,101 @@ async fn main1() -> Result<(), loga::Error> {
     let args = vark::<Args>();
     let expect_exit_code = args.exit_code.unwrap_or(0);
     let mut errors = vec![];
+    match async {
+        let mut c = Command::new("systemctl");
+        c.arg("reset-failed").arg(&args.unit);
+        let res =
+            c
+                .output()
+                .await
+                .context_with("Error attempting to reset unit status before launching", ea!(command = c.dbg_str()))?;
+        if !res.status.success() {
+            return Err(
+                loga::err_with(
+                    "Failed to reset unit status before launching",
+                    ea!(command = c.dbg_str(), output = res.dbg_str()),
+                ),
+            );
+        }
+        return Ok(());
+    }.await {
+        Ok(_) => { },
+        Err(e) => {
+            eprintln!("Failed resetting unit status: {}", e);
+        },
+    }
     match Command::new("systemctl").arg("start").arg(&args.unit).output().await {
         Ok(_) => {
             match async {
-                let pid =
-                    Command::new("systemctl")
-                        .arg("show")
-                        .arg("--property")
-                        .arg("MainPID")
-                        .arg(&args.unit)
-                        .output()
-                        .await?;
-                if !pid.status.success() {
-                    return Err(loga::err_with("Error querying unit PID", ea!(status = pid.status.dbg_str())));
-                }
-                let wait_work;
-                if let Some(pid) = pid.stdout.trim_ascii().strip_prefix(b"MainPID=") {
-                    let pid =
-                        String::from_utf8(
-                            pid.to_vec(),
-                        ).context_with("Found PID is not valid utf-8", ea!(pid = String::from_utf8_lossy(&pid)))?;
-                    let pid =
-                        i32::from_str_radix(&pid, 10).context_with("Found PID is not a valid i32", ea!(pid = pid))?;
-                    let pid =
-                        Pid::from_raw(
-                            pid,
-                        ).context_with("Found PID is not a valid PID (not positive)", ea!(pid = pid))?;
-                    wait_work = Some(spawn_blocking(move || waitpid(Some(pid), WaitOptions::empty())));
-                } else {
-                    wait_work = None;
-                }
+                let wait_work = async {
+                    ta_return!(Result < Option < WaitStatus >, loga:: Error >, loga::Error);
+                    loop {
+                        match async {
+                            ta_return!(Option < Result < Option < WaitStatus >, loga:: Error >>, loga::Error);
+                            let pid =
+                                Command::new("systemctl")
+                                    .arg("show")
+                                    .arg("--property")
+                                    .arg("MainPID")
+                                    .arg("--value")
+                                    .arg(&args.unit)
+                                    .output()
+                                    .await?;
+                            if !pid.status.success() {
+                                return Err(
+                                    loga::err_with("Error querying unit PID", ea!(status = pid.status.dbg_str())),
+                                );
+                            }
+                            if pid.stdout.is_empty() {
+                                // No PID expected?.
+                                std::future::pending::<()>().await;
+                                unreachable!();
+                            };
+                            let pid =
+                                String::from_utf8(
+                                    pid.stdout.clone(),
+                                ).context_with(
+                                    "Found PID is not valid utf-8",
+                                    ea!(pid = String::from_utf8_lossy(&pid.stdout)),
+                                )?;
+                            let pid =
+                                i32::from_str_radix(
+                                    &pid.trim_ascii(),
+                                    10,
+                                ).context_with("Found PID is not a valid i32", ea!(pid = pid))?;
+                            if pid == 0 {
+                                // Still starting up?
+                                return Ok(None);
+                            } else {
+                                let pid =
+                                    Pid::from_raw(
+                                        pid,
+                                    ).context_with("Found PID is not a valid PID (not positive)", ea!(pid = pid))?;
+                                return Ok(
+                                    Some(
+                                        spawn_blocking(
+                                            move || waitpid(Some(pid), WaitOptions::empty()).map_err(loga::err),
+                                        )
+                                            .await
+                                            .map_err(loga::err)
+                                            .and_then(|x| x),
+                                    ),
+                                );
+                            }
+                        }.await {
+                            Ok(Some(status)) => {
+                                return Ok(status);
+                            },
+                            Ok(None) => {
+                                // nop
+                            },
+                            Err(e) => {
+                                eprintln!("Error getting unit PID, retrying: {}", e);
+                            },
+                        }
+                        sleep(Duration::from_secs(1)).await;
+                    }
+                };
                 let mut sigint =
                     tokio::signal::unix::signal(SignalKind::interrupt()).context("Error hooking into SIGINT")?;
                 let sigint = Box::pin(sigint.recv());
@@ -84,8 +153,7 @@ async fn main1() -> Result<(), loga::Error> {
                     tokio::signal::unix::signal(SignalKind::terminate()).context("Error hooking into SIGTERM")?;
                 let sigterm = Box::pin(sigterm.recv());
                 select!{
-                    wait_res = wait_work.unwrap(),
-                    if wait_work.is_some() => {
+                    wait_res = wait_work => {
                         let exit_code =
                             wait_res
                                 .context("Error waiting for process wait thread")?

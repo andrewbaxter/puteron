@@ -50,7 +50,7 @@ pub enum DependencyType {
 #[derive(Serialize, Deserialize, JsonSchema, Clone, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct TaskSpecEmpty {
-    #[serde(rename = "$schema")]
+    #[serde(rename = "$schema", skip_serializing)]
     pub _schema: Option<String>,
     /// Dependencies. All dependencies must be started for this task to start, and if
     /// any dependency moves out of the started state this task will stop.
@@ -87,7 +87,7 @@ pub enum StartedCheck {
 #[derive(Serialize, Deserialize, JsonSchema, Clone, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct TaskSpecLong {
-    #[serde(rename = "$schema")]
+    #[serde(rename = "$schema", skip_serializing)]
     pub _schema: Option<String>,
     /// Dependencies. All dependencies must be started for this task to start, and if
     /// any dependency moves out of the started state this task will stop.
@@ -127,7 +127,7 @@ pub enum ShortTaskStartedAction {
 #[derive(Serialize, Deserialize, JsonSchema, Clone, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct TaskSpecShort {
-    #[serde(rename = "$schema")]
+    #[serde(rename = "$schema", skip_serializing)]
     pub _schema: Option<String>,
     /// Dependencies. All dependencies must be started for this task to start, and if
     /// any dependency moves out of the started state this task will stop.

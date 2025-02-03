@@ -40,10 +40,15 @@ pub fn ipc_path() -> Option<PathBuf> {
 
 // # Task
 //
+// List
+#[derive(Serialize, Deserialize, Clone, JsonSchema)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct RequestTaskList;
+
 // Add
 #[derive(Serialize, Deserialize, Clone, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub struct RequestAdd {
+pub struct RequestTaskAdd {
     pub task: TaskId,
     pub spec: Task,
     /// Error if task already exists.
@@ -108,7 +113,6 @@ pub enum TaskStatusSpecific {
     Empty(TaskStatusSpecificEmpty),
     Long(TaskStatusSpecificLong),
     Short(TaskStatusSpecificShort),
-    External,
 }
 
 #[derive(Serialize, Deserialize, Clone, JsonSchema)]
@@ -186,7 +190,8 @@ pub struct RespScheduleEntry {
 pub struct RequestDemonSpecDirs {}
 
 reqresp!(pub ipc {
-    TaskAdd(RequestAdd) =>(),
+    TaskList(RequestTaskList) => Vec < TaskId >,
+    TaskAdd(RequestTaskAdd) =>(),
     TaskDelete(RequestTaskDelete) =>(),
     TaskGetStatus(RequestTaskGetStatus) => TaskStatus,
     TaskGetSpec(RequestTaskGetSpec) => Task,

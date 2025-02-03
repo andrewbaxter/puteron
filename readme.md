@@ -36,7 +36,7 @@ These are logically OR'd to produce a single `on` value. To put it another way, 
 
 If a task is `on` Puteron will try to make sure it and all of its strong dependencies are running (start it, restart it if it failed, etc). If a task is `off` Puteron will try to make sure it's not running (stop it, force kill it if that fails) and stop any no-longer required dependencies.
 
-You can see tasks which affect the `transitive_on` state of a task with `puteron task list-downstream`.
+You can see tasks which affect the `transitive_on` state of a task with `puteron list-downstream`.
 
 ### Actual state
 
@@ -70,7 +70,7 @@ Build `puteron` with `cargo build` (or get it some other way).
 
 2. Define the `puteron` config and specify the above task directory - [reference](#task-specification)
 
-3. Run `puteron demon run config.json`
+3. Run `puteron demon config.json`
 
 ## Nix
 
@@ -170,10 +170,10 @@ with backup script:
 
 ```bash
 set -xeu
-puteron task off sunwet-backup-lock
-puteron task wait-until-stopped sunwet
+puteron off sunwet-backup-lock
+puteron wait-until-stopped sunwet
 rclone --config /path/to/config sync /my/data default_remote:/my-bucket/local
-puteron task on sunwet-backup-lock
+puteron on sunwet-backup-lock
 ```
 
 ### Interaction with systemd
@@ -184,7 +184,7 @@ There are two hacks to work with systemd:
 
   You can use this to allow the puteron graph to control systemd units. When run, it starts a specified service. When it's signaled to stop (sigint, sigterm) it stops the specified service.
 
-- You can add `ExecStartPost` and `ExecStopPre` commands to hook `puteron task on` and `puteron task off` with a proxy `empty` unit, to allow systemd to control the puteron graph.
+- You can add `ExecStartPost` and `ExecStopPre` commands to hook `puteron on` and `puteron off` with a proxy `empty` unit, to allow systemd to control the puteron graph.
 
 There's options to do these automatically in the provided nix files.
 

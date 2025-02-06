@@ -32,8 +32,11 @@ use {
 
 #[derive(Default, Debug)]
 pub(crate) struct ExecutePlan {
+    // For processless (instant transition) tasks
     pub(crate) log_starting: HashSet<TaskId>,
+    pub(crate) log_started: HashSet<TaskId>,
     pub(crate) log_stopping: HashSet<TaskId>,
+    pub(crate) log_stopped: HashSet<TaskId>,
     pub(crate) start: HashSet<TaskId>,
     pub(crate) stop: HashSet<TaskId>,
 }
@@ -45,6 +48,7 @@ fn plan_event_starting(plan: &mut ExecutePlan, task_id: &TaskId) {
 
 /// After state change
 pub(crate) fn plan_event_started(state_dynamic: &StateDynamic, plan: &mut ExecutePlan, task_id: &TaskId) {
+    plan.log_started.insert(task_id.clone());
     propagate_start_downstream(state_dynamic, plan, task_id);
 }
 
@@ -57,7 +61,7 @@ pub(crate) fn plan_event_stopping(state_dynamic: &StateDynamic, plan: &mut Execu
     frontier.extend(get_task(state_dynamic, task_id).downstream.borrow().keys().cloned());
     while let Some(upstream_id) = frontier.pop() {
         let upstream_task = get_task(state_dynamic, &upstream_id);
-        plan_stop_task(state_dynamic, plan, &upstream_task);
+        plan_stop_one_task(state_dynamic, plan, &upstream_task);
         frontier.extend(upstream_task.downstream.borrow().keys().cloned());
     }
 }
@@ -68,7 +72,7 @@ pub(crate) fn plan_event_stopped(state_dynamic: &StateDynamic, plan: &mut Execut
 }
 
 /// Return true if started - downstream can be started now.
-pub(crate) fn plan_start_task(state_dynamic: &StateDynamic, plan: &mut ExecutePlan, task: &TaskState_) -> bool {
+pub(crate) fn plan_start_one_task(state_dynamic: &StateDynamic, plan: &mut ExecutePlan, task: &TaskState_) -> bool {
     if !are_all_upstream_tasks_started(&state_dynamic, task) {
         return false;
     }
@@ -76,21 +80,21 @@ pub(crate) fn plan_start_task(state_dynamic: &StateDynamic, plan: &mut ExecutePl
         return true;
     }
     match &task.specific {
-        TaskStateSpecific::Empty(s) => {
+        TaskStateSpecific::Empty(specific) => {
             plan_event_starting(plan, &task.id);
-            s.started.set((true, Utc::now()));
+            specific.started.set((true, Utc::now()));
             plan_event_started(state_dynamic, plan, &task.id);
             return true;
         },
-        TaskStateSpecific::Long(s) => {
-            if s.state.get().0 != ProcState::Stopped {
+        TaskStateSpecific::Long(specific) => {
+            if specific.state.get().0 != ProcState::Stopped {
                 return false;
             }
             plan.start.insert(task.id.clone());
             return false;
         },
-        TaskStateSpecific::Short(s) => {
-            if s.state.get().0 != ProcState::Stopped {
+        TaskStateSpecific::Short(specific) => {
+            if specific.state.get().0 != ProcState::Stopped {
                 return false;
             }
             plan.start.insert(task.id.clone());
@@ -100,7 +104,7 @@ pub(crate) fn plan_start_task(state_dynamic: &StateDynamic, plan: &mut ExecutePl
 }
 
 /// Return true if task is finished stopping (can continue with upstream).
-pub(crate) fn plan_stop_task(state_dynamic: &StateDynamic, plan: &mut ExecutePlan, task: &TaskState_) -> bool {
+pub(crate) fn plan_stop_one_task(state_dynamic: &StateDynamic, plan: &mut ExecutePlan, task: &TaskState_) -> bool {
     if !are_all_downstream_tasks_stopped(state_dynamic, &task) {
         return false;
     }
@@ -109,8 +113,9 @@ pub(crate) fn plan_stop_task(state_dynamic: &StateDynamic, plan: &mut ExecutePla
     }
     match &task.specific {
         TaskStateSpecific::Empty(specific) => {
-            plan.log_stopping.insert(task.id.clone());
+            plan_event_stopping(state_dynamic, plan, &task.id);
             specific.started.set((false, Utc::now()));
+            plan.log_stopped.insert(task.id.clone());
             plan_event_stopped(state_dynamic, plan, &task.id);
             return true;
         },
@@ -172,7 +177,7 @@ pub(crate) fn plan_set_task_direct_on(state_dynamic: &StateDynamic, plan: &mut E
                 } else {
                     let upstream_task = get_task(state_dynamic, &upstream_id);
                     if are_all_upstream_tasks_started(state_dynamic, &upstream_task) {
-                        plan_start_task(state_dynamic, plan, &upstream_task);
+                        plan_start_one_task(state_dynamic, plan, &upstream_task);
                     }
                 }
             }
@@ -182,7 +187,7 @@ pub(crate) fn plan_set_task_direct_on(state_dynamic: &StateDynamic, plan: &mut E
         if !are_all_upstream_tasks_started(state_dynamic, task) {
             return;
         }
-        if !plan_start_task(state_dynamic, plan, task) {
+        if !plan_start_one_task(state_dynamic, plan, task) {
             return;
         }
     }
@@ -220,9 +225,6 @@ pub(crate) fn plan_set_task_direct_off(state_dynamic: &StateDynamic, plan: &mut 
                     },
                     DependencyType::Weak => { },
                 }
-                if is_task_stopped(&downstream_task) {
-                    continue;
-                }
                 frontier.push((false, downstream_id.clone(), downstream_type));
 
                 // Descend
@@ -232,13 +234,13 @@ pub(crate) fn plan_set_task_direct_off(state_dynamic: &StateDynamic, plan: &mut 
             } else {
                 // Stop if possible
                 let downstream_task = get_task(state_dynamic, &downstream_id);
-                plan_stop_task(state_dynamic, plan, &downstream_task);
+                plan_stop_one_task(state_dynamic, plan, &downstream_task);
             }
         }
     }
 
     // Stop this task
-    let stopped = plan_stop_task(state_dynamic, plan, &task);
+    let stopped = plan_stop_one_task(state_dynamic, plan, &task);
 
     // Stop upstream if this is already stopped
     if stopped {
@@ -313,7 +315,7 @@ fn propagate_start_downstream(state_dynamic: &StateDynamic, plan: &mut ExecutePl
         if !is_task_on(&downstream) {
             continue;
         }
-        if !plan_start_task(state_dynamic, plan, &downstream) {
+        if !plan_start_one_task(state_dynamic, plan, &downstream) {
             continue;
         }
         push_downstream(&mut frontier, downstream);
@@ -339,7 +341,7 @@ fn propagate_stop_upstream(state_dynamic: &StateDynamic, plan: &mut ExecutePlan,
         if is_task_on(upstream_task) {
             continue;
         }
-        if !plan_stop_task(state_dynamic, plan, &upstream_task) {
+        if !plan_stop_one_task(state_dynamic, plan, &upstream_task) {
             continue;
         }
         push_upstream(&mut frontier, &upstream_task);

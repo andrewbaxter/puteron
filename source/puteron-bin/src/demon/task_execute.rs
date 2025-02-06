@@ -15,17 +15,17 @@ use {
         },
         task_util::{
             get_short_task_started_action,
-            is_task_started,
         },
     },
     crate::demon::{
         task_create_delete::delete_task,
-        task_util::{
-            get_task,
-        },
+        task_util::get_task,
     },
     chrono::Utc,
-    flowcontrol::ta_return,
+    flowcontrol::{
+        exenum,
+        ta_return,
+    },
     loga::{
         ea,
         DebugDisplay,
@@ -190,28 +190,47 @@ async fn gentle_stop_proc(
     mut child: Child,
     logger: LoggerRetFuture,
     stop_timeout: Option<SimpleDuration>,
-) -> Result<(), loga::Error> {
+) {
     if let Err(e) = rustix::process::kill_process(pid, Signal::Term) {
         log.log_err(loga::WARN, e.context("Error sending SIGTERM to child"));
     }
     select!{
         r = child.wait() => {
-            let mut logger = logger.await?;
-            if let Err(e) = logger.info(format!("Process ended with status: {:?}", r)) {
-                log.log_err(loga::WARN, e.context("Error sending message to syslog"));
+            let log_msg = format!("Process ended with status: {:?}", r);
+            match logger.await {
+                Ok(mut logger) => {
+                    if let Err(e) = logger.info(log_msg) {
+                        log.log_err(loga::WARN, e.context("Error sending message to syslog"));
+                    }
+                },
+                Err(e) => {
+                    log.log_err(
+                        loga::WARN,
+                        loga::err(log_msg).also(e.context("Error recovering syslog forwarding logger")),
+                    );
+                },
             }
         },
         _ = sleep(stop_timeout.map(|x| x.into()).unwrap_or(Duration::from_secs(30))) => {
             if let Err(e) = rustix::process::kill_process(pid, Signal::Kill) {
                 log.log_err(loga::WARN, e.context("Error sending SIGKILL to child"));
             }
-            let mut logger = logger.await?;
-            if let Err(e) = logger.info(format!("Sent KILL: timeout after TERM")) {
-                log.log_err(loga::WARN, e.context("Error sending message to syslog"));
+            let log_msg = format!("Sent KILL: timeout after TERM");
+            match logger.await {
+                Ok(mut logger) => {
+                    if let Err(e) = logger.info(log_msg) {
+                        log.log_err(loga::WARN, e.context("Error sending message to syslog"));
+                    }
+                },
+                Err(e) => {
+                    log.log_err(
+                        loga::WARN,
+                        loga::err(log_msg).also(e.context("Error recovering syslog forwarding logger")),
+                    );
+                },
             }
         }
     }
-    return Ok(());
 }
 
 fn event_starting(state: &Arc<State>, task_id: &TaskId) {
@@ -266,12 +285,37 @@ pub(crate) fn set_task_user_off(state: &Arc<State>, state_dynamic: &mut StateDyn
     execute(state, state_dynamic, plan);
 }
 
+macro_rules! handle_short_stopped2{
+    // Work around borrow rules preventing code reuse
+    ($state: expr, $state_dynamic: expr, $task_id: expr, $specific: expr) => {
+        $specific.state.set((ProcState::Stopped, Utc::now()));
+        $specific.pid.set(None);
+        let started_action = get_short_task_started_action(&$specific.spec);
+        event_stopped(&$state, $state_dynamic, &$task_id);
+        if started_action == interface:: task:: ShortTaskStartedAction:: Delete {
+            delete_task($state_dynamic, &$task_id);
+        }
+    };
+}
+
+fn handle_short_stopped(state: &Arc<State>, task_id: &TaskId) {
+    let mut state_dynamic = state.dynamic.lock().unwrap();
+    let specific = exenum!(&get_task(&state_dynamic, &task_id).specific, TaskStateSpecific:: Short(s) => s).unwrap();
+    handle_short_stopped2!(state, &mut state_dynamic, task_id, specific);
+}
+
 fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePlan) {
     for task_id in plan.log_starting {
         log_starting(&state, &task_id);
     }
+    for task_id in plan.log_started {
+        log_started(&state, &task_id);
+    }
     for task_id in plan.log_stopping {
         log_stopping(&state, &task_id);
+    }
+    for task_id in plan.log_stopped {
+        log_stopped(&state, &task_id);
     }
     for task_id in plan.start {
         let task = get_task(state_dynamic, &task_id);
@@ -297,17 +341,40 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                         }).into());
                         loop {
                             event_starting(&state, &task_id);
-                            match async {
-                                ta_return!(bool, loga::Error);
 
+                            enum EndAction {
+                                Break,
+                                Retry,
+                            }
+
+                            let end_action: EndAction = async {
                                 // Execute
-                                let (mut child, pid, logger) = spawn_proc(&state, &task_id, &spec.command)?;
+                                let (mut child, pid, logger) = match spawn_proc(&state, &task_id, &spec.command) {
+                                    Ok(x) => x,
+                                    Err(e) => {
+                                        log.log_err(loga::WARN, e.context("Failed to launch process"));
+                                        match stop_rx.try_recv() {
+                                            Ok(_) => {
+                                                return EndAction::Break;
+                                            },
+                                            Err(e) => match e {
+                                                oneshot::error::TryRecvError::Empty => {
+                                                    return EndAction::Retry;
+                                                },
+                                                oneshot::error::TryRecvError::Closed => {
+                                                    return EndAction::Break;
+                                                },
+                                            },
+                                        }
+                                    },
+                                };
                                 {
                                     let state_dynamic = state.dynamic.lock().unwrap();
-                                    let task = get_task(&state_dynamic, &task_id);
-                                    let TaskStateSpecific::Long(specific) = &task.specific else {
-                                        panic!();
-                                    };
+                                    let specific =
+                                        exenum!(
+                                            &get_task(&state_dynamic, &task_id).specific,
+                                            TaskStateSpecific:: Long(s) => s
+                                        ).unwrap();
                                     specific.pid.set(Some(pid.as_raw_nonzero().get()));
                                 }
 
@@ -339,10 +406,11 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                                     }
                                     {
                                         let mut state_dynamic = state.dynamic.lock().unwrap();
-                                        let task = get_task(&state_dynamic, &task_id);
-                                        let TaskStateSpecific::Long(specific) = &task.specific else {
-                                            panic!();
-                                        };
+                                        let specific =
+                                            exenum!(
+                                                &get_task(&state_dynamic, &task_id).specific,
+                                                TaskStateSpecific:: Long(s) => s
+                                            ).unwrap();
                                         specific.state.set((ProcState::Started, Utc::now()));
                                         specific.failed_start_count.set(0);
                                         event_started(&state, &mut state_dynamic, &task_id);
@@ -357,38 +425,27 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                                     _ = live_work => {
                                         unreachable!();
                                     },
-                                    _ =& mut stop_rx => {
-                                        // Mark as stopping + do state updates
-                                        {
-                                            let mut state_dynamic = state.dynamic.lock().unwrap();
-                                            let task = get_task(&state_dynamic, &task_id);
-                                            let TaskStateSpecific::Long(specific) = &task.specific else {
-                                                panic!();
-                                            };
-                                            specific.state.set((ProcState::Stopping, Utc::now()));
-                                            event_stopping(&state, &mut state_dynamic, &task_id);
-                                        }
-
-                                        // Signal stop
-                                        gentle_stop_proc(&log, pid, child, logger, spec.stop_timeout).await?;
-
-                                        // Mark as stopped
-                                        {
-                                            let mut state_dynamic = state.dynamic.lock().unwrap();
-                                            let task = get_task(&state_dynamic, &task_id);
-                                            let TaskStateSpecific::Long(specific) = &task.specific else {
-                                                panic!();
-                                            };
-                                            specific.state.set((ProcState::Stopped, Utc::now()));
-                                            specific.pid.set(None);
-                                            event_stopped(&state, &mut state_dynamic, &task_id);
-                                        }
-                                        return Ok(true);
-                                    },
                                     r = child.wait() => {
-                                        let mut logger = logger.await?;
-                                        if let Err(e) = logger.info(format!("Process ended with status: {:?}", r)) {
-                                            log.log_err(loga::WARN, e.context("Error sending message to syslog"));
+                                        let log_msg = format!("Process ended with status: {:?}", r);
+                                        match logger.await {
+                                            Ok(mut logger) => {
+                                                if let Err(e) = logger.info(log_msg) {
+                                                    log.log_err(
+                                                        loga::WARN,
+                                                        e.context("Error sending message to syslog"),
+                                                    );
+                                                }
+                                            },
+                                            Err(e) => {
+                                                log.log_err(
+                                                    loga::WARN,
+                                                    loga::err(
+                                                        log_msg,
+                                                    ).also(
+                                                        e.context("Error recovering syslog forwarder trying to send."),
+                                                    ),
+                                                );
+                                            },
                                         }
                                         {
                                             let mut state_dynamic = state.dynamic.lock().unwrap();
@@ -396,44 +453,63 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                                             // Move through stopping
                                             event_stopping(&state, &mut state_dynamic, &task_id);
 
-                                            // Mark as starting + do state updates
-                                            let task = get_task(&state_dynamic, &task_id);
-                                            let TaskStateSpecific::Long(specific) = &task.specific else {
-                                                panic!();
-                                            };
+                                            // May or may not have started; mark as starting + do state updates
+                                            let specific = exenum!(&get_task(&state_dynamic, &task_id).specific, TaskStateSpecific:: Long(s) => s).unwrap();
                                             specific.pid.set(None);
-                                            specific.state.set((ProcState::Starting, Utc::now()));
+                                            if specific.state.get().0 != ProcState::Starting {
+                                                specific.state.set((ProcState::Starting, Utc::now()));
+                                            }
                                         }
-                                        return Ok(false);
-                                    }
+                                        return EndAction::Retry;
+                                    },
+                                    _ =& mut stop_rx => {
+                                        // Mark as stopping + do state updates
+                                        {
+                                            let mut state_dynamic = state.dynamic.lock().unwrap();
+                                            let specific =
+                                                exenum!(
+                                                    &get_task(&state_dynamic, &task_id).specific,
+                                                    TaskStateSpecific:: Long(s) => s
+                                                ).unwrap();
+                                            specific.state.set((ProcState::Stopping, Utc::now()));
+                                            event_stopping(&state, &mut state_dynamic, &task_id);
+                                        }
+
+                                        // Signal stop
+                                        gentle_stop_proc(&log, pid, child, logger, spec.stop_timeout).await;
+                                        return EndAction::Break;
+                                    },
                                 }
-                            }.await {
-                                Ok(done) => {
-                                    if done {
-                                        break;
-                                    }
+                            }.await;
+                            match end_action {
+                                EndAction::Break => {
+                                    break;
                                 },
-                                Err(e) => {
-                                    log.log_err(loga::WARN, e.context("Long task process failed with error"));
+                                EndAction::Retry => {
+                                    // nop
                                 },
                             }
                             select!{
                                 _ = sleep(restart_delay) => {
-                                },
+                                    // nop
+                                    },
                                 _ =& mut stop_rx => {
-                                    // Do stopped transition
-                                    {
-                                        let mut state_dynamic = state.dynamic.lock().unwrap();
-                                        let TaskStateSpecific::Long(specific) =
-                                            &get_task(&state_dynamic, &task_id).specific else {
-                                                panic!();
-                                            };
-                                        specific.state.set((ProcState::Stopped, Utc::now()));
-                                        event_stopped(&state, &mut state_dynamic, &task_id);
-                                    }
                                     break;
                                 }
                             }
+                        }
+
+                        // Mark as stopped
+                        {
+                            let mut state_dynamic = state.dynamic.lock().unwrap();
+                            let specific =
+                                exenum!(
+                                    &get_task(&state_dynamic, &task_id).specific,
+                                    TaskStateSpecific:: Long(s) => s
+                                ).unwrap();
+                            specific.pid.set(None);
+                            specific.state.set((ProcState::Stopped, Utc::now()));
+                            event_stopped(&state, &mut state_dynamic, &task_id);
                         }
                     }
                 });
@@ -462,27 +538,52 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                         }
                         loop {
                             event_starting(&state, &task_id);
-                            match async {
-                                ta_return!(bool, loga::Error);
-                                let (mut child, pid, logger) = spawn_proc(&state, &task_id, &spec.command)?;
+
+                            enum EndAction {
+                                Break,
+                                Retry,
+                            }
+
+                            let end_action: EndAction = async {
+                                let (mut child, pid, logger) = match spawn_proc(&state, &task_id, &spec.command) {
+                                    Ok(x) => x,
+                                    Err(e) => {
+                                        log.log_err(loga::WARN, e.context("Failed to launch process"));
+                                        match stop_rx.try_recv() {
+                                            Ok(_) => {
+                                                return EndAction::Break;
+                                            },
+                                            Err(e) => match e {
+                                                oneshot::error::TryRecvError::Empty => {
+                                                    return EndAction::Retry;
+                                                },
+                                                oneshot::error::TryRecvError::Closed => {
+                                                    return EndAction::Break;
+                                                },
+                                            },
+                                        }
+                                    },
+                                };
                                 {
                                     let state_dynamic = state.dynamic.lock().unwrap();
-                                    let task = get_task(&state_dynamic, &task_id);
-                                    let TaskStateSpecific::Short(specific) = &task.specific else {
-                                        panic!();
-                                    };
+                                    let specific =
+                                        exenum!(
+                                            &get_task(&state_dynamic, &task_id).specific,
+                                            TaskStateSpecific:: Short(s) => s
+                                        ).unwrap();
                                     specific.pid.set(Some(pid.as_raw_nonzero().get()));
                                 }
 
                                 // Wait for exit
                                 select!{
                                     r = child.wait() => {
-                                        let mut logger = logger.await?;
+                                        let logger = logger.await;
                                         let mut state_dynamic = state.dynamic.lock().unwrap();
-                                        let task = get_task(&state_dynamic, &task_id);
-                                        let TaskStateSpecific::Short(specific) = &task.specific else {
-                                            panic!();
-                                        };
+                                        let specific =
+                                            exenum!(
+                                                &get_task(&state_dynamic, &task_id).specific,
+                                                TaskStateSpecific:: Short(s) => s
+                                            ).unwrap();
                                         specific.pid.set(None);
                                         match r {
                                             Ok(r) => {
@@ -507,121 +608,108 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                                                             },
                                                         }
                                                     }
-                                                    return Ok(true);
+                                                    return EndAction::Break;
                                                 } else {
-                                                    if let Err(e) =
-                                                        logger.info(format!("Process ended with result: {:?}", r)) {
-                                                        log.log_err(
-                                                            loga::WARN,
-                                                            e.context("Error sending message to syslog"),
-                                                        );
+                                                    let log_msg =
+                                                        format!("Process ended with non-success result: {:?}", r);
+                                                    match logger {
+                                                        Ok(mut logger) => {
+                                                            if let Err(e) = logger.info(log_msg) {
+                                                                log.log_err(
+                                                                    loga::WARN,
+                                                                    e.context("Error sending message to syslog"),
+                                                                );
+                                                            }
+                                                        },
+                                                        Err(e1) => {
+                                                            log.log_err(
+                                                                loga::WARN,
+                                                                loga::err(
+                                                                    log_msg,
+                                                                ).also(
+                                                                    e1.context(
+                                                                        "Error recovering syslog forwarder trying to send.",
+                                                                    ),
+                                                                ),
+                                                            );
+                                                        },
                                                     }
                                                     {
-                                                        // Implicit drop: `specific` `task`
-                                                        event_stopping(&state, &mut state_dynamic, &task_id);
-
+                                                        // Implicit drop: `specific` `task`.
+                                                        //
                                                         // Stopping, move back to starting
-                                                        let task = get_task(&state_dynamic, &task_id);
-                                                        let TaskStateSpecific::Short(specific) = &task.specific else {
-                                                            panic!();
-                                                        };
-                                                        specific.state.set((ProcState::Starting, Utc::now()));
+                                                        let specific = exenum!(&get_task(&state_dynamic, &task_id).specific, TaskStateSpecific:: Short(s) => s).unwrap();
                                                         specific
                                                             .failed_start_count
                                                             .set(specific.failed_start_count.get() + 1);
-                                                        event_starting(&state, &task_id);
                                                     }
-                                                    return Ok(false);
+                                                    return EndAction::Retry;
                                                 }
                                             },
                                             Err(e) => {
-                                                if let Err(e) =
-                                                    logger.info(
-                                                        format!("Process ended with unknown result: {:?}", e),
-                                                    ) {
-                                                    log.log_err(
-                                                        loga::WARN,
-                                                        e.context("Error sending message to syslog"),
-                                                    );
-                                                };
+                                                let log_msg = format!("Process ended with unknown result: {:?}", e);
+                                                match logger {
+                                                    Ok(mut logger) => {
+                                                        if let Err(e) = logger.info(log_msg) {
+                                                            log.log_err(
+                                                                loga::WARN,
+                                                                e.context("Error sending message to syslog"),
+                                                            );
+                                                        };
+                                                    },
+                                                    Err(e1) => {
+                                                        log.log_err(
+                                                            loga::WARN,
+                                                            loga::err(
+                                                                log_msg,
+                                                            ).also(e1.context("Error recovering syslog forwarder")),
+                                                        );
+                                                    },
+                                                }
 
                                                 // Implicit drop: `specific` `task`
-                                                event_stopping(&state, &mut state_dynamic, &task_id);
-
+                                                //
                                                 // Stopping, move back to starting
-                                                let task = get_task(&state_dynamic, &task_id);
-                                                let TaskStateSpecific::Short(specific) = &task.specific else {
-                                                    panic!();
-                                                };
-                                                specific.state.set((ProcState::Starting, Utc::now()));
+                                                let specific = exenum!(&get_task(&state_dynamic, &task_id).specific, TaskStateSpecific:: Short(s) => s).unwrap();
                                                 specific
                                                     .failed_start_count
                                                     .set(specific.failed_start_count.get() + 1);
-                                                return Ok(false);
+                                                return EndAction::Retry;
                                             },
                                         }
                                     }
                                     _ =& mut stop_rx => {
-                                        // Mark as stopping + do state updates
+                                        // Mark as stopping + before stopping
                                         {
-                                            let mut state_dynamic = state.dynamic.lock().unwrap();
-                                            let TaskStateSpecific::Short(specific) =
-                                                &get_task(&state_dynamic, &task_id).specific else {
-                                                    panic!();
-                                                };
+                                            let state_dynamic = state.dynamic.lock().unwrap();
+                                            let specific =
+                                                exenum!(
+                                                    &get_task(&state_dynamic, &task_id).specific,
+                                                    TaskStateSpecific:: Long(s) => s
+                                                ).unwrap();
                                             specific.state.set((ProcState::Stopping, Utc::now()));
-                                            event_stopping(&state, &mut state_dynamic, &task_id);
                                         }
+                                        gentle_stop_proc(&log, pid, child, logger, spec.stop_timeout).await;
 
-                                        // Signal stop
-                                        gentle_stop_proc(&log, pid, child, logger, spec.stop_timeout).await?;
-
-                                        // Mark as stopped
-                                        {
-                                            let mut state_dynamic = state.dynamic.lock().unwrap();
-                                            let TaskStateSpecific::Short(specific) =
-                                                &get_task(&state_dynamic, &task_id).specific else {
-                                                    panic!();
-                                                };
-                                            specific.state.set((ProcState::Stopped, Utc::now()));
-                                            specific.pid.set(None);
-                                            let started_action = get_short_task_started_action(&specific.spec);
-                                            event_stopped(&state, &mut state_dynamic, &task_id);
-                                            if started_action == interface::task::ShortTaskStartedAction::Delete {
-                                                delete_task(&mut state_dynamic, &task_id);
-                                            }
-                                        }
-                                        return Ok(true);
+                                        // Stopped
+                                        handle_short_stopped(&state, &task_id);
+                                        return EndAction::Break;
                                     }
                                 };
-                            }.await {
-                                Ok(done) => {
-                                    if done {
-                                        break;
-                                    }
+                            }.await;
+                            match end_action {
+                                EndAction::Break => {
+                                    break;
                                 },
-                                Err(e) => {
-                                    log.log_err(loga::WARN, e.context("Short process failed with error"));
+                                EndAction::Retry => {
+                                    // nop
                                 },
                             }
                             select!{
                                 _ = sleep(restart_delay) => {
                                 },
                                 _ =& mut stop_rx => {
-                                    // Do stopped transition
-                                    {
-                                        let mut state_dynamic = state.dynamic.lock().unwrap();
-                                        let task = get_task(&state_dynamic, &task_id);
-                                        let TaskStateSpecific::Short(specific) = &task.specific else {
-                                            panic!();
-                                        };
-                                        specific.state.set((ProcState::Stopped, Utc::now()));
-                                        let started_action = get_short_task_started_action(&specific.spec);
-                                        event_stopped(&state, &mut state_dynamic, &task_id);
-                                        if started_action == interface::task::ShortTaskStartedAction::Delete {
-                                            delete_task(&mut state_dynamic, &task_id);
-                                        }
-                                    }
+                                    handle_short_stopped(&state, &task_id);
                                     break;
                                 }
                             }
@@ -644,14 +732,8 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                 if let Some(stop) = specific.stop.take() {
                     _ = stop.send(());
                 }
-                if is_task_started(task) {
-                    // Already exited, handle task end
-                    specific.state.set((ProcState::Stopped, Utc::now()));
-                    let started_action = get_short_task_started_action(&specific.spec);
-                    event_stopped(&state, state_dynamic, &task_id);
-                    if started_action == interface::task::ShortTaskStartedAction::Delete {
-                        delete_task(state_dynamic, &task_id);
-                    }
+                if specific.state.get().0 == ProcState::Started {
+                    handle_short_stopped2!(state, state_dynamic, task_id, specific);
                 }
             },
         }

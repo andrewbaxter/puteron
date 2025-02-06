@@ -46,14 +46,14 @@ let
           in
           loc: defs: (builtins.foldl'
             (old: new: {
-              value = lib.debug.traceVal (mergePair {
+              value = mergePair {
                 path = [ ];
                 oldVal = old.value;
                 newVal = new.value;
-              });
+              };
             })
             { value = uninit; }
-            (lib.debug.traceVal defs)).value;
+            defs).value;
       });
     };
     controlSystemd = lib.mkOption {

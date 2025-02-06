@@ -50,5 +50,10 @@
   in
   buildRust {
     root = ./puteron-bin;
+    extra = {
+    postInstall = ''
+      rm $out/bin/generate_jsonschema
+    '';
+    };
   })
 { }

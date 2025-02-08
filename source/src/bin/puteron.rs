@@ -30,7 +30,7 @@ use {
             RequestTaskWaitStopped,
         },
     },
-    puteron_bin::{
+    puteron::{
         demon::{
             self,
             DemonRunArgs,

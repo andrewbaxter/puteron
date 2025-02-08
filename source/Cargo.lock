@@ -837,24 +837,13 @@ dependencies = [
 name = "puteron"
 version = "0.1.0"
 dependencies = [
- "chrono",
- "glove",
- "schemars",
- "serde",
- "structre",
-]
-
-[[package]]
-name = "puteron-bin"
-version = "0.1.0"
-dependencies = [
  "aargvark",
  "async-pipe",
  "chrono",
  "flowcontrol",
+ "glove",
  "libc",
  "loga",
- "puteron",
  "rand",
  "rustix 0.38.44",
  "schemars",
@@ -862,6 +851,7 @@ dependencies = [
  "serde_json",
  "serde_path_to_error",
  "slotmap",
+ "structre",
  "syslog",
  "taskmanager",
  "tokio 1.43.0",

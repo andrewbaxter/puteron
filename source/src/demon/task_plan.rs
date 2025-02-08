@@ -9,28 +9,28 @@ use {
     crate::demon::{
         state::TaskStateSpecific,
         task_util::{
-            are_all_upstream_tasks_running,
+            are_all_upstream_tasks_started,
             are_all_weak_upstream_effective_on,
             get_task,
             is_task_effective_on,
             is_task_on,
             walk_task_upstream,
         },
+        interface::{
+            base::TaskId,
+            ipc::Actual,
+            task::DependencyType,
+        },
     },
     chrono::Utc,
-    puteron::interface::{
-        base::TaskId,
-        ipc::Actual,
-        task::DependencyType,
-    },
     std::collections::HashSet,
 };
 
 #[derive(Default, Debug)]
 pub(crate) struct ExecutePlan {
     // For processless (instant transition) tasks
-    pub(crate) log_running: HashSet<TaskId>,
-    pub(crate) log_shutting_down: HashSet<TaskId>,
+    pub(crate) log_started: HashSet<TaskId>,
+    pub(crate) log_stopping: HashSet<TaskId>,
     pub(crate) log_stopped: HashSet<TaskId>,
     pub(crate) run: HashSet<TaskId>,
     pub(crate) stop: HashSet<TaskId>,
@@ -38,13 +38,13 @@ pub(crate) struct ExecutePlan {
 
 /// After state change
 pub(crate) fn plan_event_started(state_dynamic: &StateDynamic, plan: &mut ExecutePlan, task_id: &TaskId) {
-    plan.log_running.insert(task_id.clone());
+    plan.log_started.insert(task_id.clone());
     propagate_start_downstream(state_dynamic, plan, task_id);
 }
 
 /// After state change
 pub(crate) fn plan_event_stopping(state_dynamic: &StateDynamic, plan: &mut ExecutePlan, task_id: &TaskId) {
-    plan.log_shutting_down.insert(task_id.clone());
+    plan.log_stopping.insert(task_id.clone());
 
     // Stop all downstream immediately
     let mut frontier = vec![];
@@ -63,18 +63,18 @@ pub(crate) fn plan_event_stopped(state_dynamic: &StateDynamic, plan: &mut Execut
 
 /// Return true if started - downstream can be started now.
 pub(crate) fn plan_start_one_task(state_dynamic: &StateDynamic, plan: &mut ExecutePlan, task: &TaskState_) -> bool {
-    if !are_all_upstream_tasks_running(&state_dynamic, task) {
+    if !are_all_upstream_tasks_started(&state_dynamic, task) {
         return false;
     }
     match task.actual.get().0 {
-        Actual::Running => return true,
-        Actual::BootingUp | Actual::ShuttingDown => return false,
+        Actual::Started => return true,
+        Actual::Starting | Actual::Stopping => return false,
         Actual::Stopped => { },
     }
     match &task.specific {
         TaskStateSpecific::Empty(_) => {
-            task.actual.set((Actual::Running, Utc::now()));
-            plan.log_running.insert(task.id.clone());
+            task.actual.set((Actual::Started, Utc::now()));
+            plan.log_started.insert(task.id.clone());
             return true;
         },
         TaskStateSpecific::Long(_) => {
@@ -111,8 +111,8 @@ pub(crate) fn plan_stop_one_task(state_dynamic: &StateDynamic, plan: &mut Execut
             plan.stop.insert(task.id.clone());
         },
         TaskStateSpecific::Short(_) => {
-            if task.actual.get().0 == Actual::Running {
-                plan.log_shutting_down.insert(task.id.clone());
+            if task.actual.get().0 == Actual::Started {
+                plan.log_stopping.insert(task.id.clone());
                 task.actual.set((Actual::Stopped, Utc::now()));
             } else {
                 plan.stop.insert(task.id.clone());
@@ -232,13 +232,13 @@ pub(crate) fn plan_set_task_direct_on(state_dynamic: &StateDynamic, plan: &mut E
     // Update related on status, start tasks
     adjust_related_on(state_dynamic, root_task_id, true, |state_dynamic, task| {
         // Only weakly-related, state changed elements
-        if are_all_upstream_tasks_running(state_dynamic, task) {
+        if are_all_upstream_tasks_started(state_dynamic, task) {
             plan_start_one_task(state_dynamic, plan, task);
         }
     });
 
     // Start this and the whole subree around this task (strong + weak)
-    if !are_all_upstream_tasks_running(state_dynamic, task) {
+    if !are_all_upstream_tasks_started(state_dynamic, task) {
         return;
     }
     if !plan_start_one_task(state_dynamic, plan, task) {

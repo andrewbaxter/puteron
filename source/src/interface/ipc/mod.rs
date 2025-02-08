@@ -81,9 +81,9 @@ pub struct TaskStatusSpecificEmpty {}
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Actual {
     Stopped,
-    BootingUp,
-    Running,
-    ShuttingDown,
+    Starting,
+    Started,
+    Stopping,
 }
 
 #[derive(Serialize, Deserialize, Clone, JsonSchema)]

@@ -1,5 +1,5 @@
 use {
-    puteron::interface::ipc::{
+    crate::interface::ipc::{
         ipc,
         ipc_path,
     },

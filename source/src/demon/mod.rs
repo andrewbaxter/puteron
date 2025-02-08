@@ -21,7 +21,7 @@ use {
         Log,
         ResultContext,
     },
-    puteron::interface::{
+    crate::interface::{
         self,
         demon::Config,
         ipc::{
@@ -453,7 +453,7 @@ async fn handle_ipc(state: Arc<State>, mut conn: ipc::ServerConn) {
                             let Some(task) = maybe_get_task(&state_dynamic, &m.0) else {
                                 return Err(format!("Unknown task [{}]", m.0));
                             };
-                            if task.actual.get().0 == Actual::Running {
+                            if task.actual.get().0 == Actual::Started {
                                 return Ok(rr(()));
                             }
                             task.started_waiters.borrow_mut().push(notify_tx);

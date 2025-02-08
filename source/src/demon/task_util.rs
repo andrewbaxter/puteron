@@ -4,7 +4,7 @@ use {
         TaskStateSpecific,
         TaskState_,
     },
-    puteron::interface::{
+    crate::interface::{
         self,
         base::TaskId,
         ipc::Actual,
@@ -60,7 +60,7 @@ pub(crate) fn get_short_task_started_action(specific: &TaskSpecShort) -> ShortTa
     };
 }
 
-pub(crate) fn are_all_upstream_tasks_running(state_dynamic: &StateDynamic, task: &TaskState_) -> bool {
+pub(crate) fn are_all_upstream_tasks_started(state_dynamic: &StateDynamic, task: &TaskState_) -> bool {
     let mut all_started = true;
     walk_task_upstream(task, |deps| {
         for (task_id, _) in deps {
@@ -68,7 +68,7 @@ pub(crate) fn are_all_upstream_tasks_running(state_dynamic: &StateDynamic, task:
                 all_started = false;
                 return;
             };
-            if state_dynamic.task_alloc[*dep].actual.get().0 != Actual::Running {
+            if state_dynamic.task_alloc[*dep].actual.get().0 != Actual::Started {
                 all_started = false;
                 return;
             }

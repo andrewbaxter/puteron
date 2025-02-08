@@ -1,4 +1,5 @@
 use {
+    crate::interface,
     loga::{
         ea,
         DebugDisplay,
@@ -6,7 +7,6 @@ use {
         Log,
         ResultContext,
     },
-    puteron::interface,
     std::{
         collections::{
             BTreeMap,

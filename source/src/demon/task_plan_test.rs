@@ -29,7 +29,7 @@ use {
         },
     },
     chrono::DateTime,
-    puteron::interface::{
+    crate::interface::{
         ipc::Actual,
         task::{
             Command,
@@ -54,7 +54,7 @@ fn check<
     plan: ExecutePlan,
     start: impl AsRef<[&'a str]>,
     stop: impl AsRef<[&'a str]>,
-    running: impl AsRef<[&'a str]>,
+    started: impl AsRef<[&'a str]>,
     stopped: impl AsRef<[&'a str]>,
 ) {
     eprintln!("Plan: {:?}", plan);
@@ -69,8 +69,8 @@ fn check<
     if got_stop != expected_stop {
         errors.push(format!("To stop:\n  Expected: {:?}\n       Got: {:?}", expected_stop, got_stop));
     }
-    for task_id in running.as_ref() {
-        if get_task(state_dynamic, &task_id.to_string()).actual.get().0 != Actual::Running {
+    for task_id in started.as_ref() {
+        if get_task(state_dynamic, &task_id.to_string()).actual.get().0 != Actual::Started {
             errors.push(format!("Expected [{}] started but isn't", task_id));
         }
     }
@@ -111,7 +111,7 @@ fn task_empty(
     upstream: impl IntoIterator<Item = (&'static str, DependencyType)>,
 ) -> TaskState_ {
     return task(id, if started {
-        Actual::Running
+        Actual::Started
     } else {
         Actual::Stopped
     }, TaskStateSpecific::Empty(TaskStateEmpty { spec: TaskSpecEmpty {
@@ -129,11 +129,11 @@ fn task_short(
 ) -> TaskState_ {
     match actual {
         Actual::Stopped => { },
-        Actual::BootingUp => {
+        Actual::Starting => {
             assert!(on);
         },
-        Actual::Running => { },
-        Actual::ShuttingDown => {
+        Actual::Started => { },
+        Actual::Stopping => {
             assert!(!on);
         },
     }
@@ -141,8 +141,8 @@ fn task_short(
         pid: Default::default(),
         failed_start_count: Default::default(),
         stop: match actual {
-            Actual::BootingUp | Actual::Running => RefCell::new(Some(oneshot::channel().0)),
-            Actual::ShuttingDown | Actual::Stopped => RefCell::new(None),
+            Actual::Starting | Actual::Started => RefCell::new(Some(oneshot::channel().0)),
+            Actual::Stopping | Actual::Stopped => RefCell::new(None),
         },
         spec: TaskSpecShort {
             _schema: Default::default(),
@@ -170,11 +170,11 @@ fn task_long(
 ) -> TaskState_ {
     match actual {
         Actual::Stopped => { },
-        Actual::BootingUp => {
+        Actual::Starting => {
             assert!(on);
         },
-        Actual::Running => { },
-        Actual::ShuttingDown => {
+        Actual::Started => { },
+        Actual::Stopping => {
             assert!(!on);
         },
     }
@@ -182,8 +182,8 @@ fn task_long(
         pid: Default::default(),
         failed_start_count: Default::default(),
         stop: match actual {
-            Actual::BootingUp | Actual::Running => RefCell::new(Some(oneshot::channel().0)),
-            Actual::ShuttingDown | Actual::Stopped => RefCell::new(None),
+            Actual::Starting | Actual::Started => RefCell::new(Some(oneshot::channel().0)),
+            Actual::Stopping | Actual::Stopped => RefCell::new(None),
         },
         spec: TaskSpecLong {
             _schema: Default::default(),
@@ -289,7 +289,7 @@ fn single_off() {
 fn single_off_proc() {
     let state_dynamic = build_state([
         //. .
-        task_long("a", true, Actual::BootingUp, []),
+        task_long("a", true, Actual::Starting, []),
     ]);
     let mut plan = ExecutePlan::default();
     plan_set_task_direct_off(&state_dynamic, &mut plan, &"a".to_string());
@@ -300,7 +300,7 @@ fn single_off_proc() {
 fn single_off_proc_short() {
     let state_dynamic = build_state([
         //. .
-        task_short("a", true, Actual::Running, []),
+        task_short("a", true, Actual::Started, []),
     ]);
     let mut plan = ExecutePlan::default();
     plan_set_task_direct_off(&state_dynamic, &mut plan, &"a".to_string());
@@ -384,7 +384,7 @@ fn start_strong_upstream_weak_downstream_2() {
 fn stop_strong_upstream() {
     let state_dynamic = build_state([
         //. .
-        task_long("a", false, Actual::Running, []),
+        task_long("a", false, Actual::Started, []),
         task_empty("b", true, [("a", DependencyType::Strong)]),
     ]);
     let mut plan = ExecutePlan::default();
@@ -396,7 +396,7 @@ fn stop_strong_upstream() {
 fn stop_weak_downstream() {
     let state_dynamic = build_state([
         //. .
-        task_long("b", true, Actual::Running, []),
+        task_long("b", true, Actual::Started, []),
         task_empty("c", true, [("b", DependencyType::Weak)]),
     ]);
     let mut plan = ExecutePlan::default();
@@ -408,7 +408,7 @@ fn stop_weak_downstream() {
 fn strong_downstream_dont_stop() {
     let state_dynamic = build_state([
         //. .
-        task_long("b", true, Actual::Running, []),
+        task_long("b", true, Actual::Started, []),
         task_empty("c", true, [("b", DependencyType::Strong)]),
     ]);
     let mut plan = ExecutePlan::default();
@@ -420,9 +420,9 @@ fn strong_downstream_dont_stop() {
 fn stop_strong_upstream_weak_downstream_1() {
     let state_dynamic = build_state([
         //. .
-        task_long("a", true, Actual::Running, []),
+        task_long("a", true, Actual::Started, []),
         task_empty("b", true, [("a", DependencyType::Strong)]),
-        task_long("c", true, Actual::Running, [("b", DependencyType::Weak)]),
+        task_long("c", true, Actual::Started, [("b", DependencyType::Weak)]),
     ]);
     let mut plan = ExecutePlan::default();
     plan_set_task_direct_off(&state_dynamic, &mut plan, &"b".to_string());
@@ -433,7 +433,7 @@ fn stop_strong_upstream_weak_downstream_1() {
 fn stop_strong_upstream_weak_downstream_2() {
     let state_dynamic = build_state([
         //. .
-        task_long("a", false, Actual::Running, []),
+        task_long("a", false, Actual::Started, []),
         task_empty("b", true, [("a", DependencyType::Strong)]),
         task_empty("c", true, [("b", DependencyType::Weak)]),
     ]);
@@ -450,7 +450,7 @@ fn stopped_weak_downstream() {
     // upstreams.
     let state_dynamic = build_state([
         //. .
-        task_long("a", false, Actual::Running, []),
+        task_long("a", false, Actual::Started, []),
         task_empty("b", true, [("a", DependencyType::Weak)]),
     ]);
     let b = get_task(&state_dynamic, &"b".to_string());
@@ -467,9 +467,9 @@ fn stopped_weak_downstream() {
 fn test_zigzag_stop_weak_downstream() {
     let state_dynamic = build_state([
         //. .
-        task_long("a", true, Actual::Running, []),
+        task_long("a", true, Actual::Started, []),
         task_empty("b", true, [("a", DependencyType::Strong)]),
-        task_long("c", true, Actual::Running, [("a", DependencyType::Weak)]),
+        task_long("c", true, Actual::Started, [("a", DependencyType::Weak)]),
     ]);
     let a = get_task(&state_dynamic, &"a".to_string());
     let c = get_task(&state_dynamic, &"c".to_string());

@@ -48,12 +48,13 @@ async fn systemctl_show_prop(unit: &str, prop: &str) -> Result<String, loga::Err
         return Err(loga::err(format!("Error querying unit [{}] property [{}]", unit, prop)));
     }
     return Ok(
-        String::from_utf8(
-            proc.stdout.clone(),
-        ).context_with(
-            format!("Found unit [{}] property [{}] value is not valid utf-8", unit, prop),
-            ea!(value = String::from_utf8_lossy(&proc.stdout)),
-        )?,
+        String::from_utf8(proc.stdout.clone())
+            .context_with(
+                format!("Found unit [{}] property [{}] value is not valid utf-8", unit, prop),
+                ea!(value = String::from_utf8_lossy(&proc.stdout)),
+            )?
+            .trim_ascii()
+            .to_string(),
     );
 }
 
@@ -69,8 +70,6 @@ async fn systemctl_show_prop(unit: &str, prop: &str) -> Result<String, loga::Err
 struct Args {
     /// The unit to foreground
     unit: String,
-    /// Oneshot - if the unit exits with a success exit code, don't stop the unit.
-    oneshot: Option<()>,
 }
 
 async fn main1() -> Result<(), loga::Error> {
@@ -106,11 +105,10 @@ async fn main1() -> Result<(), loga::Error> {
                     loop {
                         match async {
                             ta_return!((), loga::Error);
-                            let status =
-                                systemctl_show_prop(&args.unit, "SubState")
-                                    .await
-                                    .context("Error getting unit result")?;
-                            if status != "running" {
+                            if systemctl_show_prop(&args.unit, "SubState")
+                                .await
+                                .context("Error getting unit result")? !=
+                                "running" {
                                 return Ok(());
                             }
                             let pid =
@@ -199,10 +197,8 @@ async fn main1() -> Result<(), loga::Error> {
             errors.push(e.context("Error starting unit"));
         },
     }
-    if errors.is_empty() && args.oneshot.is_some() {
-        if let Err(e) = Command::new("systemctl").arg("stop").arg(&args.unit).output().await {
-            errors.push(e.context("Error stopping unit"));
-        }
+    if let Err(e) = Command::new("systemctl").arg("stop").arg(&args.unit).output().await {
+        errors.push(e.context("Error stopping unit"));
     }
     if !errors.is_empty() {
         return Err(loga::agg_err("Encountered one or more errors", errors));

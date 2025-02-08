@@ -67,12 +67,6 @@ let
               default = false;
               type = lib.types.bool;
             };
-            exitCode = lib.mkOption
-              {
-                description = "The unit code considered as a successful exit (default 0)";
-                default = null;
-                type = lib.types.nullOr lib.types.int;
-              };
           };
         }));
     };
@@ -234,27 +228,12 @@ in
         // (lib.attrsets.mapAttrs'
         (name: value: {
           name = mapSystemdTaskName name;
-          value =
-            if value.oneshot
-            then {
-              type = "short";
-              command = {
-                line = [ ]
-                  ++ [ "${pkg}/bin/puteron-control-systemd" "--oneshot" name ]
-                  ++ (if value.exitCode != null then [ "--exit-code" "${builtins.toString value.exitCode}" ] else [ ])
-                  ++ [ ];
-              };
-            }
-            else
-              {
-                type = "long";
-                command = {
-                  line = [ ]
-                    ++ [ "${pkg}/bin/puteron-control-systemd" name ]
-                    ++ (if value.exitCode != null then [ "--exit-code" "${builtins.toString value.exitCode}" ] else [ ])
-                    ++ [ ];
-                };
-              };
+          value = {
+            type = if value.oneshot then "short" else "long";
+            command = {
+              line = [ "${pkg}/bin/puteron-control-systemd" name ];
+            };
+          };
         })
         controlSystemd)
 

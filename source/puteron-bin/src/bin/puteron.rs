@@ -14,7 +14,7 @@ use {
         self,
         base::TaskId,
         ipc::{
-            ProcState,
+            Actual,
             RequestDemonEnv,
             RequestDemonSpecDirs,
             RequestTaskAdd,
@@ -28,7 +28,6 @@ use {
             RequestTaskOnOff,
             RequestTaskWaitStarted,
             RequestTaskWaitStopped,
-            TaskStatusSpecific,
         },
     },
     puteron_bin::{
@@ -133,36 +132,15 @@ async fn main() {
                 #[derive(Serialize)]
                 struct Entry {
                     on: bool,
-                    state: String,
+                    actual: Actual,
                 }
 
                 let mut out = HashMap::new();
                 for task in tasks {
                     let status = client.send_req(RequestTaskGetStatus(task.clone())).await.map_err(loga::err)?;
-                    const STATE_STARTING: &str = "starting";
-                    const STATE_STARTED: &str = "started";
-                    const STATE_STOPPING: &str = "stopping";
-                    const STATE_STOPPED: &str = "stopped";
                     out.insert(task, Entry {
-                        on: status.direct_on || status.transitive_on,
-                        state: match status.specific {
-                            TaskStatusSpecific::Empty(specific) => match specific.started {
-                                true => STATE_STARTED.to_string(),
-                                false => STATE_STOPPED.to_string(),
-                            },
-                            TaskStatusSpecific::Long(specific) => match specific.state {
-                                ProcState::Stopped => STATE_STOPPED.to_string(),
-                                ProcState::Starting => STATE_STARTING.to_string(),
-                                ProcState::Started => STATE_STARTED.to_string(),
-                                ProcState::Stopping => STATE_STOPPING.to_string(),
-                            },
-                            TaskStatusSpecific::Short(specific) => match specific.state {
-                                ProcState::Stopped => STATE_STOPPED.to_string(),
-                                ProcState::Starting => STATE_STARTING.to_string(),
-                                ProcState::Started => STATE_STARTED.to_string(),
-                                ProcState::Stopping => STATE_STOPPING.to_string(),
-                            },
-                        },
+                        on: status.effective_on,
+                        actual: status.actual,
                     });
                 }
                 println!("{}", serde_json::to_string_pretty(&out).unwrap());

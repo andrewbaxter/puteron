@@ -75,25 +75,20 @@ pub struct RequestTaskGetStatus(pub TaskId);
 
 #[derive(Serialize, Deserialize, Clone, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub struct TaskStatusSpecificEmpty {
-    pub started: bool,
-    pub started_at: DateTime<Utc>,
-}
+pub struct TaskStatusSpecificEmpty {}
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub enum ProcState {
+pub enum Actual {
     Stopped,
-    Starting,
-    Started,
-    Stopping,
+    BootingUp,
+    Running,
+    ShuttingDown,
 }
 
 #[derive(Serialize, Deserialize, Clone, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct TaskStatusSpecificLong {
-    pub state: ProcState,
-    pub state_at: DateTime<Utc>,
     pub pid: Option<i32>,
     pub restarts: usize,
 }
@@ -101,8 +96,6 @@ pub struct TaskStatusSpecificLong {
 #[derive(Serialize, Deserialize, Clone, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct TaskStatusSpecificShort {
-    pub state: ProcState,
-    pub state_at: DateTime<Utc>,
     pub pid: Option<i32>,
     pub restarts: usize,
 }
@@ -122,6 +115,9 @@ pub struct TaskStatus {
     pub direct_on_at: DateTime<Utc>,
     pub transitive_on: bool,
     pub transitive_on_at: DateTime<Utc>,
+    pub effective_on: bool,
+    pub actual: Actual,
+    pub actual_at: DateTime<Utc>,
     pub specific: TaskStatusSpecific,
 }
 
@@ -149,8 +145,8 @@ pub struct RequestTaskListUserOn;
 #[derive(Serialize, Deserialize, Clone, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct TaskDependencyStatus {
-    pub on: bool,
-    pub started: bool,
+    pub effective_on: bool,
+    pub actual: Actual,
     pub dependency_type: DependencyType,
     pub related: HashMap<TaskId, TaskDependencyStatus>,
 }
@@ -196,7 +192,7 @@ reqresp!(pub ipc {
     TaskGetStatus(RequestTaskGetStatus) => TaskStatus,
     TaskGetSpec(RequestTaskGetSpec) => Task,
     TaskOnOff(RequestTaskOnOff) =>(),
-    TaskWaitStarted(RequestTaskWaitStarted) =>(),
+    TaskWaitRunning(RequestTaskWaitStarted) =>(),
     TaskWaitStopped(RequestTaskWaitStopped) =>(),
     TaskListUserOn(RequestTaskListUserOn) => Vec < TaskId >,
     TaskListUpstream(RequestTaskListUpstream) => HashMap < TaskId,

@@ -37,7 +37,7 @@ use {
         interface::{
             self,
             base::TaskId,
-            ipc::ProcState,
+            ipc::Actual,
         },
         time::{
             SimpleDuration,
@@ -115,8 +115,8 @@ fn spawn_proc(
     spec: &interface::task::Command,
 ) -> Result<(Child, Pid, LoggerRetFuture), loga::Error> {
     // Prep command and args
-    let mut command = Command::new(&spec.line[0]);
-    command.args(&spec.line[1..]);
+    let mut command = Command::new("puteron-exec-wrap");
+    command.args(&spec.line);
 
     // Working dir
     match &spec.working_directory {
@@ -147,7 +147,6 @@ fn spawn_proc(
     command.stdin(Stdio::null());
 
     // Launch
-    command.process_group(0);
     let mut child = command.spawn().context("Failed to spawn subprocess")?;
     drop(command);
     let pid = Pid::from_raw(child.id().unwrap() as i32).unwrap();
@@ -287,8 +286,8 @@ pub(crate) fn set_task_user_off(state: &Arc<State>, state_dynamic: &mut StateDyn
 
 macro_rules! handle_short_stopped2{
     // Work around borrow rules preventing code reuse
-    ($state: expr, $state_dynamic: expr, $task_id: expr, $specific: expr) => {
-        $specific.state.set((ProcState::Stopped, Utc::now()));
+    ($state: expr, $state_dynamic: expr, $task_id: expr, $task: expr, $specific: expr) => {
+        $task.actual.set((Actual::Stopped, Utc::now()));
         $specific.pid.set(None);
         let started_action = get_short_task_started_action(&$specific.spec);
         event_stopped(&$state, $state_dynamic, &$task_id);
@@ -300,32 +299,30 @@ macro_rules! handle_short_stopped2{
 
 fn handle_short_stopped(state: &Arc<State>, task_id: &TaskId) {
     let mut state_dynamic = state.dynamic.lock().unwrap();
-    let specific = exenum!(&get_task(&state_dynamic, &task_id).specific, TaskStateSpecific:: Short(s) => s).unwrap();
-    handle_short_stopped2!(state, &mut state_dynamic, task_id, specific);
+    let task = get_task(&state_dynamic, &task_id);
+    let specific = exenum!(&task.specific, TaskStateSpecific:: Short(s) => s).unwrap();
+    handle_short_stopped2!(state, &mut state_dynamic, task_id, task, specific);
 }
 
 fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePlan) {
-    for task_id in plan.log_starting {
-        log_starting(&state, &task_id);
-    }
-    for task_id in plan.log_started {
+    for task_id in plan.log_running {
         log_started(&state, &task_id);
     }
-    for task_id in plan.log_stopping {
+    for task_id in plan.log_shutting_down {
         log_stopping(&state, &task_id);
     }
     for task_id in plan.log_stopped {
         log_stopped(&state, &task_id);
     }
-    for task_id in plan.start {
+    for task_id in plan.run {
         let task = get_task(state_dynamic, &task_id);
         let log = state.log.fork(ea!(task = task.id));
+
+        // Mark as starting
+        task.actual.set((Actual::BootingUp, Utc::now()));
         match &task.specific {
             TaskStateSpecific::Empty(_) => unreachable!(),
             TaskStateSpecific::Long(s) => {
-                // Mark as starting
-                s.state.set((ProcState::Starting, Utc::now()));
-
                 // Start
                 let (stop_tx, mut stop_rx) = oneshot::channel();
                 *s.stop.borrow_mut() = Some(stop_tx);
@@ -406,12 +403,10 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                                     }
                                     {
                                         let mut state_dynamic = state.dynamic.lock().unwrap();
+                                        let task = get_task(&state_dynamic, &task_id);
+                                        task.actual.set((Actual::Running, Utc::now()));
                                         let specific =
-                                            exenum!(
-                                                &get_task(&state_dynamic, &task_id).specific,
-                                                TaskStateSpecific:: Long(s) => s
-                                            ).unwrap();
-                                        specific.state.set((ProcState::Started, Utc::now()));
+                                            exenum!(&task.specific, TaskStateSpecific:: Long(s) => s).unwrap();
                                         specific.failed_start_count.set(0);
                                         event_started(&state, &mut state_dynamic, &task_id);
                                     }
@@ -454,11 +449,13 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                                             event_stopping(&state, &mut state_dynamic, &task_id);
 
                                             // May or may not have started; mark as starting + do state updates
-                                            let specific = exenum!(&get_task(&state_dynamic, &task_id).specific, TaskStateSpecific:: Long(s) => s).unwrap();
-                                            specific.pid.set(None);
-                                            if specific.state.get().0 != ProcState::Starting {
-                                                specific.state.set((ProcState::Starting, Utc::now()));
+                                            let task = get_task(&state_dynamic, &task_id);
+                                            if task.actual.get().0 != Actual::BootingUp {
+                                                task.actual.set((Actual::BootingUp, Utc::now()));
                                             }
+                                            let specific =
+                                                exenum!(&task.specific, TaskStateSpecific:: Long(s) => s).unwrap();
+                                            specific.pid.set(None);
                                         }
                                         return EndAction::Retry;
                                     },
@@ -466,12 +463,8 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                                         // Mark as stopping + do state updates
                                         {
                                             let mut state_dynamic = state.dynamic.lock().unwrap();
-                                            let specific =
-                                                exenum!(
-                                                    &get_task(&state_dynamic, &task_id).specific,
-                                                    TaskStateSpecific:: Long(s) => s
-                                                ).unwrap();
-                                            specific.state.set((ProcState::Stopping, Utc::now()));
+                                            let task = get_task(&state_dynamic, &task_id);
+                                            task.actual.set((Actual::ShuttingDown, Utc::now()));
                                             event_stopping(&state, &mut state_dynamic, &task_id);
                                         }
 
@@ -502,22 +495,16 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                         // Mark as stopped
                         {
                             let mut state_dynamic = state.dynamic.lock().unwrap();
-                            let specific =
-                                exenum!(
-                                    &get_task(&state_dynamic, &task_id).specific,
-                                    TaskStateSpecific:: Long(s) => s
-                                ).unwrap();
+                            let task = get_task(&state_dynamic, &task_id);
+                            task.actual.set((Actual::Stopped, Utc::now()));
+                            let specific = exenum!(&task.specific, TaskStateSpecific:: Long(s) => s).unwrap();
                             specific.pid.set(None);
-                            specific.state.set((ProcState::Stopped, Utc::now()));
                             event_stopped(&state, &mut state_dynamic, &task_id);
                         }
                     }
                 });
             },
             TaskStateSpecific::Short(s) => {
-                // Mark as starting
-                s.state.set((ProcState::Starting, Utc::now()));
-
                 // Start
                 let (stop_tx, mut stop_rx) = oneshot::channel();
                 *s.stop.borrow_mut() = Some(stop_tx);
@@ -579,20 +566,18 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                                     r = child.wait() => {
                                         let logger = logger.await;
                                         let mut state_dynamic = state.dynamic.lock().unwrap();
+                                        let task = get_task(&state_dynamic, &task_id);
                                         let specific =
-                                            exenum!(
-                                                &get_task(&state_dynamic, &task_id).specific,
-                                                TaskStateSpecific:: Short(s) => s
-                                            ).unwrap();
+                                            exenum!(&task.specific, TaskStateSpecific:: Short(s) => s).unwrap();
                                         specific.pid.set(None);
                                         match r {
                                             Ok(r) => {
                                                 if r.code().filter(|c| success_codes.contains(c)).is_some() {
                                                     // Mark as started + do state updates
                                                     {
+                                                        task.actual.set((Actual::Running, Utc::now()));
                                                         specific.stop.borrow_mut().take();
                                                         specific.failed_start_count.set(0);
-                                                        specific.state.set((ProcState::Started, Utc::now()));
                                                         let started_action =
                                                             get_short_task_started_action(&specific.spec);
                                                         event_started(&state, &mut state_dynamic, &task_id);
@@ -682,12 +667,8 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                                         // Mark as stopping + before stopping
                                         {
                                             let state_dynamic = state.dynamic.lock().unwrap();
-                                            let specific =
-                                                exenum!(
-                                                    &get_task(&state_dynamic, &task_id).specific,
-                                                    TaskStateSpecific:: Long(s) => s
-                                                ).unwrap();
-                                            specific.state.set((ProcState::Stopping, Utc::now()));
+                                            let task = get_task(&state_dynamic, &task_id);
+                                            task.actual.set((Actual::ShuttingDown, Utc::now()));
                                         }
                                         gentle_stop_proc(&log, pid, child, logger, spec.stop_timeout).await;
 
@@ -732,8 +713,8 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                 if let Some(stop) = specific.stop.take() {
                     _ = stop.send(());
                 }
-                if specific.state.get().0 == ProcState::Started {
-                    handle_short_stopped2!(state, state_dynamic, task_id, specific);
+                if task.actual.get().0 == Actual::Running {
+                    handle_short_stopped2!(state, state_dynamic, task_id, task, specific);
                 }
             },
         }

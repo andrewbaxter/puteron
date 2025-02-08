@@ -14,6 +14,7 @@ use {
         },
         task_util::{
             get_task,
+            is_task_effective_on,
             maybe_get_task,
             walk_task_upstream,
         },
@@ -22,7 +23,7 @@ use {
     puteron::interface::{
         self,
         base::TaskId,
-        ipc::ProcState,
+        ipc::Actual,
         task::Task,
     },
     std::cell::{
@@ -100,10 +101,7 @@ pub(crate) fn build_task(state_dynamic: &mut StateDynamic, task_id: TaskId, spec
                     .borrow_mut()
                     .insert(task_id.clone(), upstream_type.clone());
             }
-            specific = TaskStateSpecific::Empty(TaskStateEmpty {
-                started: Cell::new((false, Utc::now())),
-                spec: spec,
-            });
+            specific = TaskStateSpecific::Empty(TaskStateEmpty { spec: spec });
         },
         interface::task::Task::Long(spec) => {
             for (upstream_id, upstream_type) in &spec.upstream {
@@ -114,7 +112,6 @@ pub(crate) fn build_task(state_dynamic: &mut StateDynamic, task_id: TaskId, spec
             }
             specific = TaskStateSpecific::Long(TaskStateLong {
                 spec: spec,
-                state: Cell::new((ProcState::Stopped, Utc::now())),
                 stop: RefCell::new(None),
                 pid: Cell::new(None),
                 failed_start_count: Cell::new(0),
@@ -137,7 +134,6 @@ pub(crate) fn build_task(state_dynamic: &mut StateDynamic, task_id: TaskId, spec
             }
             specific = TaskStateSpecific::Short(TaskStateShort {
                 spec: spec,
-                state: Cell::new((ProcState::Stopped, Utc::now())),
                 stop: RefCell::new(None),
                 pid: Cell::new(None),
                 failed_start_count: Cell::new(0),
@@ -148,6 +144,26 @@ pub(crate) fn build_task(state_dynamic: &mut StateDynamic, task_id: TaskId, spec
         id: task_id.clone(),
         direct_on: Cell::new((false, Utc::now())),
         transitive_on: Cell::new((false, Utc::now())),
+        awueo: Cell::new({
+            let mut all_on = true;
+            for (upstream_id, upstream_type) in match &specific {
+                TaskStateSpecific::Empty(specific) => &specific.spec.upstream,
+                TaskStateSpecific::Long(specific) => &specific.spec.upstream,
+                TaskStateSpecific::Short(specific) => &specific.spec.upstream,
+            } {
+                match *upstream_type {
+                    interface::task::DependencyType::Strong => { },
+                    interface::task::DependencyType::Weak => {
+                        if !is_task_effective_on(&get_task(state_dynamic, upstream_id)) {
+                            all_on = false;
+                            break;
+                        }
+                    },
+                }
+            }
+            all_on
+        }),
+        actual: Cell::new((Actual::Stopped, Utc::now())),
         downstream: Default::default(),
         specific: specific,
         started_waiters: Default::default(),

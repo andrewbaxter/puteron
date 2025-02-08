@@ -7,9 +7,7 @@ use {
     puteron::interface::{
         self,
         base::TaskId,
-        ipc::{
-            ProcState,
-        },
+        ipc::Actual,
         task::{
             DependencyType,
             ShortTaskStartedAction,
@@ -40,20 +38,13 @@ pub(crate) fn maybe_get_task<'a>(state_dynamic: &'a StateDynamic, task_id: &Task
     return Some(&state_dynamic.task_alloc[*t]);
 }
 
-pub(crate) fn is_task_on(t: &TaskState_) -> bool {
-    return t.direct_on.get().0 || t.transitive_on.get().0;
+/// Effective on = `"all weak upstream on" && ("direct_on" || "transitive_on")`
+pub(crate) fn is_task_effective_on(t: &TaskState_) -> bool {
+    return t.awueo.get() && is_task_on(t);
 }
 
-pub(crate) fn is_task_started(t: &TaskState_) -> bool {
-    match &t.specific {
-        TaskStateSpecific::Empty(s) => return s.started.get().0,
-        TaskStateSpecific::Long(s) => {
-            return s.state.get().0 == ProcState::Started;
-        },
-        TaskStateSpecific::Short(s) => {
-            return s.state.get().0 == ProcState::Started;
-        },
-    }
+pub(crate) fn is_task_on(t: &TaskState_) -> bool {
+    return t.direct_on.get().0 || t.transitive_on.get().0;
 }
 
 pub(crate) fn get_short_task_started_action(specific: &TaskSpecShort) -> ShortTaskStartedAction {
@@ -69,7 +60,7 @@ pub(crate) fn get_short_task_started_action(specific: &TaskSpecShort) -> ShortTa
     };
 }
 
-pub(crate) fn are_all_upstream_tasks_started(state_dynamic: &StateDynamic, task: &TaskState_) -> bool {
+pub(crate) fn are_all_upstream_tasks_running(state_dynamic: &StateDynamic, task: &TaskState_) -> bool {
     let mut all_started = true;
     walk_task_upstream(task, |deps| {
         for (task_id, _) in deps {
@@ -77,7 +68,7 @@ pub(crate) fn are_all_upstream_tasks_started(state_dynamic: &StateDynamic, task:
                 all_started = false;
                 return;
             };
-            if !is_task_started(&state_dynamic.task_alloc[*dep]) {
+            if state_dynamic.task_alloc[*dep].actual.get().0 != Actual::Running {
                 all_started = false;
                 return;
             }
@@ -86,23 +77,29 @@ pub(crate) fn are_all_upstream_tasks_started(state_dynamic: &StateDynamic, task:
     return all_started;
 }
 
-pub(crate) fn is_task_stopped(t: &TaskState_) -> bool {
-    match &t.specific {
-        TaskStateSpecific::Empty(s) => return !s.started.get().0,
-        TaskStateSpecific::Long(s) => {
-            return s.state.get().0 == ProcState::Stopped;
-        },
-        TaskStateSpecific::Short(s) => {
-            return s.state.get().0 == ProcState::Stopped;
-        },
-    }
-}
-
 pub(crate) fn are_all_downstream_tasks_stopped(state_dynamic: &StateDynamic, task: &TaskState_) -> bool {
     for (task_id, _) in task.downstream.borrow().iter() {
-        if !is_task_stopped(get_task(state_dynamic, task_id)) {
+        if get_task(state_dynamic, task_id).actual.get().0 != Actual::Stopped {
             return false;
         }
     }
     return true;
+}
+
+pub(crate) fn are_all_weak_upstream_effective_on(state_dynamic: &StateDynamic, task: &TaskState_) -> bool {
+    let mut all = true;
+    walk_task_upstream(task, |upstream| {
+        for (upstream_id, upstream_type) in upstream {
+            if *upstream_type != DependencyType::Weak {
+                continue;
+            }
+            let effective_on = is_task_effective_on(&get_task(state_dynamic, upstream_id));
+            if !effective_on {
+                eprintln!("are all - {} is not effective on", upstream_id);
+                all = false;
+                break;
+            }
+        }
+    });
+    return all;
 }

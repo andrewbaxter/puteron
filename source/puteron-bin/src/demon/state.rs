@@ -11,7 +11,7 @@ use {
     puteron::interface::{
         self,
         base::TaskId,
-        ipc::ProcState,
+        ipc::Actual,
         task::DependencyType,
     },
     slotmap::{
@@ -41,12 +41,10 @@ use {
 };
 
 pub(crate) struct TaskStateEmpty {
-    pub(crate) started: Cell<(bool, DateTime<Utc>)>,
     pub(crate) spec: interface::task::TaskSpecEmpty,
 }
 
 pub(crate) struct TaskStateLong {
-    pub(crate) state: Cell<(ProcState, DateTime<Utc>)>,
     pub(crate) pid: Cell<Option<i32>>,
     pub(crate) failed_start_count: Cell<usize>,
     pub(crate) stop: RefCell<Option<oneshot::Sender<()>>>,
@@ -54,7 +52,6 @@ pub(crate) struct TaskStateLong {
 }
 
 pub(crate) struct TaskStateShort {
-    pub(crate) state: Cell<(ProcState, DateTime<Utc>)>,
     pub(crate) pid: Cell<Option<i32>>,
     pub(crate) failed_start_count: Cell<usize>,
     pub(crate) stop: RefCell<Option<oneshot::Sender<()>>>,
@@ -71,6 +68,9 @@ pub(crate) struct TaskState_ {
     pub(crate) id: TaskId,
     pub(crate) direct_on: Cell<(bool, DateTime<Utc>)>,
     pub(crate) transitive_on: Cell<(bool, DateTime<Utc>)>,
+    // "all weak upstream effective on"
+    pub(crate) awueo: Cell<bool>,
+    pub(crate) actual: Cell<(Actual, DateTime<Utc>)>,
     pub(crate) downstream: RefCell<HashMap<TaskId, DependencyType>>,
     pub(crate) specific: TaskStateSpecific,
     pub(crate) started_waiters: RefCell<Vec<oneshot::Sender<bool>>>,

@@ -32,3 +32,4 @@ rand = "0.8"
 tokio-util = { version = "0.7", features = ["rt"] }
 schemars = "0.8"
 serde_path_to_error = "0.1"
+libc = "0.2"

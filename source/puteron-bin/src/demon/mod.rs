@@ -30,6 +30,7 @@ use {
                 ServerResp,
             },
             ipc_path,
+            Actual,
             RespScheduleEntry,
             TaskDependencyStatus,
             TaskStatus,
@@ -67,9 +68,7 @@ use {
     },
     task_util::{
         get_task,
-        is_task_on,
-        is_task_started,
-        is_task_stopped,
+        is_task_effective_on,
         maybe_get_task,
         walk_task_upstream,
     },
@@ -329,7 +328,7 @@ async fn handle_ipc(state: Arc<State>, mut conn: ipc::ServerConn) {
                             if !m.unique {
                                 return Err(format!("A task with this ID already exists"));
                             }
-                            if !is_task_stopped(task) {
+                            if task.actual.get().0 != Actual::Stopped {
                                 return Err(format!("Task isn't stopped yet"));
                             }
                             let same = match (&m.spec, &task.specific) {
@@ -377,7 +376,7 @@ async fn handle_ipc(state: Arc<State>, mut conn: ipc::ServerConn) {
                         let Some(task) = maybe_get_task(&state_dynamic, &m.0) else {
                             return Ok(rr(()));
                         };
-                        if !is_task_stopped(&task) {
+                        if task.actual.get().0 != Actual::Stopped {
                             return Err(format!("Task isn't stopped yet"));
                         }
                         delete_task(&mut state_dynamic, &m.0);
@@ -393,25 +392,21 @@ async fn handle_ipc(state: Arc<State>, mut conn: ipc::ServerConn) {
                             direct_on_at: task.direct_on.get().1,
                             transitive_on: task.transitive_on.get().0,
                             transitive_on_at: task.transitive_on.get().1,
+                            effective_on: is_task_effective_on(task),
+                            actual: task.actual.get().0,
+                            actual_at: task.actual.get().1,
                             specific: match &task.specific {
-                                TaskStateSpecific::Empty(s) => interface::ipc::TaskStatusSpecific::Empty(
-                                    interface::ipc::TaskStatusSpecificEmpty {
-                                        started: s.started.get().0,
-                                        started_at: s.started.get().1,
-                                    },
+                                TaskStateSpecific::Empty(_) => interface::ipc::TaskStatusSpecific::Empty(
+                                    interface::ipc::TaskStatusSpecificEmpty {},
                                 ),
                                 TaskStateSpecific::Long(s) => interface::ipc::TaskStatusSpecific::Long(
                                     interface::ipc::TaskStatusSpecificLong {
-                                        state: s.state.get().0,
-                                        state_at: s.state.get().1,
                                         pid: s.pid.get(),
                                         restarts: s.failed_start_count.get(),
                                     },
                                 ),
                                 TaskStateSpecific::Short(s) => interface::ipc::TaskStatusSpecific::Short(
                                     interface::ipc::TaskStatusSpecificShort {
-                                        state: s.state.get().0,
-                                        state_at: s.state.get().1,
                                         pid: s.pid.get(),
                                         restarts: s.failed_start_count.get(),
                                     },
@@ -451,14 +446,14 @@ async fn handle_ipc(state: Arc<State>, mut conn: ipc::ServerConn) {
                             return Ok(rr(()));
                         }
                     },
-                    ipc::ServerReq::TaskWaitStarted(rr, m) => {
+                    ipc::ServerReq::TaskWaitRunning(rr, m) => {
                         let (notify_tx, notify_rx) = oneshot::channel();
                         {
                             let state_dynamic = state.dynamic.lock().unwrap();
                             let Some(task) = maybe_get_task(&state_dynamic, &m.0) else {
                                 return Err(format!("Unknown task [{}]", m.0));
                             };
-                            if is_task_started(task) {
+                            if task.actual.get().0 == Actual::Running {
                                 return Ok(rr(()));
                             }
                             task.started_waiters.borrow_mut().push(notify_tx);
@@ -476,7 +471,7 @@ async fn handle_ipc(state: Arc<State>, mut conn: ipc::ServerConn) {
                             let Some(task) = maybe_get_task(&state_dynamic, &m.0) else {
                                 return Err(format!("Unknown task [{}]", m.0));
                             };
-                            if is_task_stopped(task) {
+                            if task.actual.get().0 == Actual::Stopped {
                                 return Ok(rr(()));
                             }
                             task.stopped_waiters.borrow_mut().push(notify_tx);
@@ -518,8 +513,8 @@ async fn handle_ipc(state: Arc<State>, mut conn: ipc::ServerConn) {
                                 let push_status;
                                 let task = get_task(&state_dynamic, &task_id);
                                 push_status = TaskDependencyStatus {
-                                    on: is_task_on(task),
-                                    started: is_task_started(task),
+                                    effective_on: is_task_effective_on(task),
+                                    actual: task.actual.get().0,
                                     dependency_type: dependency_type,
                                     related: HashMap::new(),
                                 };
@@ -557,8 +552,8 @@ async fn handle_ipc(state: Arc<State>, mut conn: ipc::ServerConn) {
                                 let push_status;
                                 let task = get_task(&state_dynamic, &task_id);
                                 push_status = TaskDependencyStatus {
-                                    on: is_task_on(task),
-                                    started: is_task_started(task),
+                                    effective_on: is_task_effective_on(task),
+                                    actual: task.actual.get().0,
                                     dependency_type: dependency_type,
                                     related: HashMap::new(),
                                 };

@@ -51,9 +51,11 @@
   buildRust {
     root = ./puteron-bin;
     extra = {
-    postInstall = ''
-      rm $out/bin/generate_jsonschema
-    '';
+      nativeBuildInputs = [ pkgs.makeWrapper ];
+      postInstall = ''
+        wrapProgram $out/bin/puteron --prefix PATH : $out/bin
+        rm $out/bin/generate_jsonschema
+      '';
     };
   })
 { }

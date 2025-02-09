@@ -82,6 +82,9 @@ pub enum StartedCheck {
     TcpSocket(SocketAddr),
     /// Consider started when a file exists at the following path
     Path(PathBuf),
+    /// Consider started when a file exists at the following path, relative to the
+    /// "run" directory: either `/run` or the dir in the `XDG_RUNTIME_DIR` env var.
+    RunPath(PathBuf),
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, PartialEq, Eq)]

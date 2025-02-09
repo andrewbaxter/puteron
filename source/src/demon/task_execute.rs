@@ -13,17 +13,30 @@ use {
             plan_set_task_direct_on,
             ExecutePlan,
         },
-        task_util::{
-            get_short_task_started_action,
-        },
+        task_util::get_short_task_started_action,
     },
-    crate::demon::{
-        task_create_delete::delete_task,
-        task_util::get_task,
+    crate::{
+        demon::{
+            task_create_delete::delete_task,
+            task_util::get_task,
+        },
+        interface::{
+            self,
+            base::TaskId,
+            ipc::{
+                Actual,
+            },
+        },
+        ipc_util::run_dir,
+        time::{
+            SimpleDuration,
+            SimpleDurationUnit,
+        },
     },
     chrono::Utc,
     flowcontrol::{
         exenum,
+        shed,
         ta_return,
     },
     loga::{
@@ -32,17 +45,6 @@ use {
         ErrContext,
         Log,
         ResultContext,
-    },
-    crate::{
-        interface::{
-            self,
-            base::TaskId,
-            ipc::Actual,
-        },
-        time::{
-            SimpleDuration,
-            SimpleDurationUnit,
-        },
     },
     rustix::{
         process::Signal,
@@ -398,6 +400,15 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                                                     sleep(Duration::from_secs(1)).await;
                                                 }
                                             },
+                                            interface::task::StartedCheck::RunPath(c) => shed!{
+                                                let c = run_dir().join(c);
+                                                loop {
+                                                    if c.exists() {
+                                                        break;
+                                                    }
+                                                    sleep(Duration::from_secs(1)).await;
+                                                }
+                                            },
                                         },
                                     }
                                     {
@@ -522,11 +533,15 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                         if success_codes.is_empty() {
                             success_codes.insert(0);
                         }
-                        loop {
+                        let stopped = loop {
                             event_starting(&state, &task_id);
 
+                            struct EndActionBreak {
+                                stopped: bool,
+                            }
+
                             enum EndAction {
-                                Break,
+                                Break(EndActionBreak),
                                 Retry,
                             }
 
@@ -537,14 +552,14 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                                         log.log_err(loga::WARN, e.context("Failed to launch process"));
                                         match stop_rx.try_recv() {
                                             Ok(_) => {
-                                                return EndAction::Break;
+                                                return EndAction::Break(EndActionBreak { stopped: true });
                                             },
                                             Err(e) => match e {
                                                 oneshot::error::TryRecvError::Empty => {
                                                     return EndAction::Retry;
                                                 },
                                                 oneshot::error::TryRecvError::Closed => {
-                                                    return EndAction::Break;
+                                                    return EndAction::Break(EndActionBreak { stopped: true });
                                                 },
                                             },
                                         }
@@ -592,7 +607,7 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                                                             },
                                                         }
                                                     }
-                                                    return EndAction::Break;
+                                                    return EndAction::Break(EndActionBreak { stopped: false });
                                                 } else {
                                                     let log_msg =
                                                         format!("Process ended with non-success result: {:?}", r);
@@ -672,14 +687,13 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                                         gentle_stop_proc(&log, pid, child, logger, spec.stop_timeout).await;
 
                                         // Stopped
-                                        handle_short_stopped(&state, &task_id);
-                                        return EndAction::Break;
+                                        return EndAction::Break(EndActionBreak { stopped: true });
                                     }
                                 };
                             }.await;
                             match end_action {
-                                EndAction::Break => {
-                                    break;
+                                EndAction::Break(b) => {
+                                    break b.stopped;
                                 },
                                 EndAction::Retry => {
                                     // nop
@@ -689,10 +703,12 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                                 _ = sleep(restart_delay) => {
                                 },
                                 _ =& mut stop_rx => {
-                                    handle_short_stopped(&state, &task_id);
-                                    break;
+                                    break true;
                                 }
                             }
+                        };
+                        if stopped {
+                            handle_short_stopped(&state, &task_id);
                         }
                     }
                 });

@@ -11,6 +11,7 @@ use {
         ErrContext,
         ResultContext,
     },
+    puteron::ipc_util::run_dir,
     rustix::{
         process::{
             pidfd_open,
@@ -19,7 +20,9 @@ use {
         termios::Pid,
     },
     std::{
+        fs::remove_file,
         os::fd::OwnedFd,
+        path::PathBuf,
         time::Duration,
     },
     tokio::{
@@ -66,10 +69,41 @@ async fn systemctl_show_prop(unit: &str, prop: &str) -> Result<String, loga::Err
 ///
 /// If the unit has no MainPID after starting, doesn't wait for the process to exit
 /// (i.e. control is one-directional).
+///
+/// This creates a file containing the unit PID (or empty if there's no associated
+/// process) in the `/run` or `XDG_RUNTIME_DIR` directory with the name
+/// `puteron-control-systemd-${unit}.pid`. When the unit stops, the file is deleted.
 #[derive(Aargvark)]
 struct Args {
     /// The unit to foreground
     unit: String,
+}
+
+struct PidFile {
+    path: PathBuf,
+}
+
+impl PidFile {
+    async fn new(path: PathBuf, pid: Option<Pid>) -> Self {
+        let contents;
+        if let Some(pid) = pid {
+            contents = pid.as_raw_nonzero().to_string();
+        } else {
+            contents = "".to_string();
+        }
+        if let Err(e) = tokio::fs::write(&path, contents).await {
+            eprintln!("Warning: failed to create pid file at [{:?}]: {}", path, e);
+        }
+        return Self { path: path };
+    }
+}
+
+impl Drop for PidFile {
+    fn drop(&mut self) {
+        if let Err(e) = remove_file(&self.path) {
+            eprintln!("Warning: Failed to delete pid file at [{:?}]: {}", self.path, e);
+        }
+    }
 }
 
 async fn main1() -> Result<(), loga::Error> {
@@ -98,9 +132,11 @@ async fn main1() -> Result<(), loga::Error> {
             eprintln!("Warning: Failed resetting unit status: {}", e);
         },
     }
+    let pidfile_path = run_dir().join(format!("puteron-control-systemd-{}.pid", args.unit));
     match Command::new("systemctl").arg("start").arg(&args.unit).output().await {
         Ok(_) => {
             match async {
+                let mut cleanup_pid = None;
                 let wait_work = async {
                     loop {
                         match async {
@@ -117,6 +153,7 @@ async fn main1() -> Result<(), loga::Error> {
                                     .context("Error querying unit PID")?;
                             if pid.is_empty() {
                                 // No PID expected?.
+                                cleanup_pid = Some(PidFile::new(pidfile_path.clone(), None).await);
                                 std::future::pending::<()>().await;
                                 unreachable!();
                             };
@@ -145,14 +182,18 @@ async fn main1() -> Result<(), loga::Error> {
                                         "Error converting pidfd to asyncfd for unit",
                                         ea!(pid = pid.dbg_str()),
                                     )?;
-                                let _: AsyncFdReadyGuard<OwnedFd> =
-                                    pidfd
-                                        .readable()
-                                        .await
-                                        .context_with(
-                                            "Error waiting for pidfd to report readable",
-                                            ea!(pid = pid.dbg_str()),
-                                        )?;
+                                cleanup_pid = Some(PidFile::new(pidfile_path.clone(), None).await);
+                                let _: AsyncFdReadyGuard<OwnedFd> = match pidfd.readable().await {
+                                    Ok(x) => x,
+                                    Err(e) => {
+                                        eprintln!(
+                                            "Error waiting for pidfd for pid {:?} to report readable: {}",
+                                            pid,
+                                            e
+                                        );
+                                        return Ok(());
+                                    },
+                                };
                                 return Ok(());
                             }
                         }.await {

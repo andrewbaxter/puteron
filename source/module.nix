@@ -229,11 +229,17 @@ in
         (name: value: {
           name = mapSystemdTaskName name;
           value = {
-            type = if value.oneshot then "short" else "long";
             command = {
               line = [ "${pkg}/bin/puteron-control-systemd" name ];
             };
-          };
+          } // (if value.oneshot then {
+            type = "short";
+          } else {
+            type = "long";
+            started_check = {
+              run_path = "puteron-control-systemd-${name}.pid";
+            };
+          });
         })
         controlSystemd)
 

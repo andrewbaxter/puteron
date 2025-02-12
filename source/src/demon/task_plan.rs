@@ -223,9 +223,9 @@ pub(crate) fn adjust_related_on(
 pub(crate) fn plan_set_task_direct_on(state_dynamic: &StateDynamic, plan: &mut ExecutePlan, root_task_id: &TaskId) {
     // Update on flags and check if the effective `on` state has changed
     let task = get_task(state_dynamic, root_task_id);
-    let was_on = is_task_effective_on(&task);
+    let was_effective_on = is_task_effective_on(&task);
     task.direct_on.set((true, Utc::now()));
-    if was_on {
+    if was_effective_on && is_task_effective_on(&task) {
         return;
     }
 

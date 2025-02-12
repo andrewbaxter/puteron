@@ -191,20 +191,19 @@ pub async fn main(log: &Log, args: DemonRunArgs) -> Result<(), loga::Error> {
         // ## Start default-on tasks
         for (id, task) in state_dynamic.tasks.iter().map(|(x, y)| (x.clone(), y.clone())).collect::<Vec<_>>() {
             let task = &state_dynamic.task_alloc[task];
-            let user_on;
+            let direct_on;
             match &task.specific {
                 TaskStateSpecific::Empty(s) => {
-                    user_on = s.spec.default_on;
+                    direct_on = s.spec.default_on;
                 },
                 TaskStateSpecific::Long(s) => {
-                    user_on = s.spec.default_on;
+                    direct_on = s.spec.default_on;
                 },
                 TaskStateSpecific::Short(s) => {
-                    user_on = s.spec.default_on;
+                    direct_on = s.spec.default_on;
                 },
             }
-            log.log_with(loga::DEBUG, "Reporting task initial state-", ea!(task = task.id, on = user_on));
-            if !user_on {
+            if !direct_on {
                 continue;
             }
             set_task_user_on(&state, &mut state_dynamic, &id);

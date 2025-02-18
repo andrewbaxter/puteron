@@ -144,21 +144,38 @@ pub struct RequestTaskListUserOn;
 // List upstream
 #[derive(Serialize, Deserialize, Clone, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub struct TaskDependencyStatus {
+pub struct TaskUpstreamStatus {
     pub effective_on: bool,
     pub actual: Actual,
     pub dependency_type: DependencyType,
-    pub related: HashMap<TaskId, TaskDependencyStatus>,
+    pub upstream: HashMap<TaskId, TaskUpstreamStatus>,
 }
 
 #[derive(Serialize, Deserialize, Clone, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub struct RequestTaskListUpstream(pub TaskId);
+pub struct RequestTaskListUpstream {
+    pub task: TaskId,
+    pub include_started: bool,
+}
 
 // List downstream
 #[derive(Serialize, Deserialize, Clone, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub struct RequestTaskListDownstream(pub TaskId);
+pub struct TaskDownstreamStatus {
+    pub effective_on: bool,
+    pub actual: Actual,
+    pub dependency_type: DependencyType,
+    pub effective_dependency_type: DependencyType,
+    pub downstream: HashMap<TaskId, TaskDownstreamStatus>,
+}
+
+#[derive(Serialize, Deserialize, Clone, JsonSchema)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct RequestTaskListDownstream {
+    pub task: TaskId,
+    pub include_weak: bool,
+    pub include_stopped: bool,
+}
 
 // # Demon
 //
@@ -196,9 +213,9 @@ reqresp!(pub ipc {
     TaskWaitStopped(RequestTaskWaitStopped) =>(),
     TaskListUserOn(RequestTaskListUserOn) => Vec < TaskId >,
     TaskListUpstream(RequestTaskListUpstream) => HashMap < TaskId,
-    TaskDependencyStatus >,
+    TaskUpstreamStatus >,
     TaskListDownstream(RequestTaskListDownstream) => HashMap < TaskId,
-    TaskDependencyStatus >,
+    TaskDownstreamStatus >,
     DemonEnv(RequestDemonEnv) => HashMap < String,
     String >,
     DemonListSchedule(RequestDemonListSchedule) => Vec < RespScheduleEntry >,

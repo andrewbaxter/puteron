@@ -7,7 +7,30 @@ mod task_plan;
 mod task_plan_test;
 
 use {
-    crate::spec::merge_specs,
+    crate::{
+        interface::{
+            self,
+            base::TaskId,
+            demon::Config,
+            ipc::{
+                ipc::{
+                    self,
+                    ServerResp,
+                },
+                ipc_path,
+                Actual,
+                RespScheduleEntry,
+                TaskDownstreamStatus,
+                TaskStatus,
+                TaskUpstreamStatus,
+            },
+            task::{
+                DependencyType,
+                Task,
+            },
+        },
+        spec::merge_specs,
+    },
     aargvark::{
         traits_impls::AargvarkJson,
         Aargvark,
@@ -20,25 +43,6 @@ use {
         ErrContext,
         Log,
         ResultContext,
-    },
-    crate::interface::{
-        self,
-        demon::Config,
-        ipc::{
-            ipc::{
-                self,
-                ServerResp,
-            },
-            ipc_path,
-            Actual,
-            RespScheduleEntry,
-            TaskDependencyStatus,
-            TaskStatus,
-        },
-        task::{
-            DependencyType,
-            Task,
-        },
     },
     schedule::{
         pop_schedule,
@@ -500,38 +504,58 @@ async fn handle_ipc(state: Arc<State>, mut conn: ipc::ServerConn) {
                     },
                     ipc::ServerReq::TaskListUpstream(rr, m) => {
                         let state_dynamic = state.dynamic.lock().unwrap();
-                        if !state_dynamic.tasks.contains_key(&m.0) {
-                            return Err(format!("Unknown task [{}]", m.0));
+                        if !state_dynamic.tasks.contains_key(&m.task) {
+                            return Err(format!("Unknown task [{}]", m.task));
                         }
                         let mut out_stack = vec![];
                         let mut root = None;
-                        let mut frontier = vec![(true, m.0.clone(), DependencyType::Strong)];
-                        while let Some((first, task_id, dependency_type)) = frontier.pop() {
-                            if first {
-                                frontier.push((false, task_id.clone(), dependency_type));
+
+                        struct Entry {
+                            first: bool,
+                            task_id: TaskId,
+                            dependency_type: DependencyType,
+                        }
+
+                        let mut frontier = vec![Entry {
+                            first: true,
+                            task_id: m.task.clone(),
+                            dependency_type: DependencyType::Strong,
+                        }];
+                        while let Some(e) = frontier.pop() {
+                            if e.first {
+                                let task = get_task(&state_dynamic, &e.task_id);
+                                let actual = task.actual.get().0;
+                                if !m.include_started && actual == Actual::Started {
+                                    continue;
+                                }
+                                frontier.push(Entry {
+                                    first: false,
+                                    task_id: e.task_id.clone(),
+                                    dependency_type: e.dependency_type,
+                                });
                                 let push_status;
-                                let task = get_task(&state_dynamic, &task_id);
-                                push_status = TaskDependencyStatus {
+                                push_status = TaskUpstreamStatus {
                                     effective_on: is_task_effective_on(task),
-                                    actual: task.actual.get().0,
-                                    dependency_type: dependency_type,
-                                    related: HashMap::new(),
+                                    actual: actual,
+                                    dependency_type: e.dependency_type,
+                                    upstream: HashMap::new(),
                                 };
                                 walk_task_upstream(task, |upstream| {
-                                    for (next_id, next_dep_type) in upstream {
-                                        frontier.push((true, next_id.clone(), match dependency_type {
-                                            DependencyType::Strong => *next_dep_type,
-                                            DependencyType::Weak => DependencyType::Weak,
-                                        }));
+                                    for (up_id, up_type) in upstream {
+                                        frontier.push(Entry {
+                                            first: true,
+                                            task_id: up_id.clone(),
+                                            dependency_type: *up_type,
+                                        });
                                     }
                                 });
-                                out_stack.push((task_id, push_status));
+                                out_stack.push((e.task_id, push_status));
                             } else {
                                 let (top_id, top) = out_stack.pop().unwrap();
                                 if let Some(parent) = out_stack.last_mut() {
-                                    parent.1.related.insert(top_id, top);
+                                    parent.1.upstream.insert(top_id, top);
                                 } else {
-                                    root = Some(top.related);
+                                    root = Some(top.upstream);
                                 }
                             }
                         }
@@ -539,33 +563,67 @@ async fn handle_ipc(state: Arc<State>, mut conn: ipc::ServerConn) {
                     },
                     ipc::ServerReq::TaskListDownstream(rr, m) => {
                         let state_dynamic = state.dynamic.lock().unwrap();
-                        if !state_dynamic.tasks.contains_key(&m.0) {
-                            return Err(format!("Unknown task [{}]", m.0));
+                        if !state_dynamic.tasks.contains_key(&m.task) {
+                            return Err(format!("Unknown task [{}]", m.task));
                         }
                         let mut out_stack = vec![];
                         let mut root = None;
-                        let mut frontier = vec![(true, m.0.clone(), DependencyType::Strong)];
-                        while let Some((first, task_id, dependency_type)) = frontier.pop() {
-                            if first {
-                                frontier.push((false, task_id.clone(), dependency_type));
+
+                        struct Entry {
+                            first: bool,
+                            task_id: TaskId,
+                            dependency_type: DependencyType,
+                            effective_dependency_type: DependencyType,
+                        }
+
+                        let mut frontier = vec![Entry {
+                            first: true,
+                            task_id: m.task.clone(),
+                            dependency_type: DependencyType::Strong,
+                            effective_dependency_type: DependencyType::Strong,
+                        }];
+                        while let Some(e) = frontier.pop() {
+                            if e.first {
+                                let task = get_task(&state_dynamic, &e.task_id);
+                                let actual = task.actual.get().0;
+                                if !m.include_stopped && actual == Actual::Stopped {
+                                    continue;
+                                }
+                                frontier.push(Entry {
+                                    first: false,
+                                    task_id: e.task_id.clone(),
+                                    dependency_type: e.dependency_type,
+                                    effective_dependency_type: e.effective_dependency_type,
+                                });
                                 let push_status;
-                                let task = get_task(&state_dynamic, &task_id);
-                                push_status = TaskDependencyStatus {
+                                push_status = TaskDownstreamStatus {
                                     effective_on: is_task_effective_on(task),
                                     actual: task.actual.get().0,
-                                    dependency_type: dependency_type,
-                                    related: HashMap::new(),
+                                    dependency_type: e.dependency_type,
+                                    effective_dependency_type: e.effective_dependency_type,
+                                    downstream: HashMap::new(),
                                 };
                                 for (down_id, down_type) in task.downstream.borrow().iter() {
-                                    frontier.push((true, down_id.clone(), *down_type));
+                                    if !m.include_weak && *down_type == DependencyType::Weak {
+                                        continue;
+                                    }
+                                    frontier.push(Entry {
+                                        first: true,
+                                        task_id: down_id.clone(),
+                                        dependency_type: *down_type,
+                                        effective_dependency_type: match e.effective_dependency_type {
+                                            DependencyType::Strong => *down_type,
+                                            DependencyType::Weak => DependencyType::Weak,
+                                        },
+                                    });
                                 }
-                                out_stack.push((task_id, push_status));
+                                out_stack.push((e.task_id, push_status));
                             } else {
                                 let (top_id, top) = out_stack.pop().unwrap();
                                 if let Some(parent) = out_stack.last_mut() {
-                                    parent.1.related.insert(top_id, top);
+                                    parent.1.downstream.insert(top_id, top);
                                 } else {
-                                    root = Some(top.related);
+                                    root = Some(top.downstream);
                                 }
                             }
                         }

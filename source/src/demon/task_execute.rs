@@ -23,9 +23,7 @@ use {
         interface::{
             self,
             base::TaskId,
-            ipc::{
-                Actual,
-            },
+            ipc::Actual,
         },
         ipc_util::run_dir,
         time::{
@@ -52,8 +50,6 @@ use {
     },
     std::{
         collections::HashSet,
-        future::Future,
-        pin::Pin,
         process::Stdio,
         sync::Arc,
         time::Duration,
@@ -62,6 +58,7 @@ use {
     tokio::{
         io::{
             AsyncBufReadExt,
+            AsyncRead,
             BufReader,
         },
         net::TcpStream,
@@ -71,7 +68,6 @@ use {
         },
         select,
         sync::oneshot,
-        task::JoinError,
         time::{
             sleep,
             timeout,
@@ -99,23 +95,11 @@ fn log_stopped(state: &State, task_id: &TaskId) {
     state.log.log_with(loga::DEBUG, "State change: stopped (3)", ea!(task = task_id));
 }
 
-type LoggerRetFuture =
-    Pin<
-        Box<
-            dyn
-
-                    Future<
-                        Output = Result<syslog::Logger<syslog::LoggerBackend, syslog::Formatter3164>, JoinError>,
-                    > +
-                    Send,
-        >,
-    >;
-
 fn spawn_proc(
     state: &State,
     task_id: &TaskId,
     spec: &interface::task::Command,
-) -> Result<(Child, Pid, LoggerRetFuture), loga::Error> {
+) -> Result<(Child, Pid), loga::Error> {
     // Prep command and args
     let mut command = Command::new("setsid");
     command.args(&spec.line);
@@ -154,22 +138,26 @@ fn spawn_proc(
     let pid = Pid::from_raw(child.id().unwrap() as i32).unwrap();
 
     // Stdout/err -> syslog 2
-    let logger = Box::pin(state.tokio_tasks.spawn({
-        let stdout = LinesStream::new(BufReader::new(child.stdout.take().unwrap()).lines());
-        let stderr = LinesStream::new(BufReader::new(child.stderr.take().unwrap()).lines());
-        let mut combined_output = StreamExt::merge(stdout, stderr);
-        let mut logger = syslog::unix(Formatter3164 {
+    fn log_stream(
+        state: &State,
+        log: &Log,
+        task_id: &TaskId,
+        stream: impl AsyncRead + 'static + Unpin + Send + Sync,
+    ) -> Result<(), loga::Error> {
+        let mut syslogger = syslog::unix(Formatter3164 {
             facility: syslog::Facility::LOG_USER,
             process: task_id.clone(),
             hostname: None,
             pid: 0,
         })?;
-        async move {
-            while let Some(line) = combined_output.next().await {
+        let log = log.clone();
+        let mut stream = LinesStream::new(BufReader::new(stream).lines());
+        state.tokio_tasks.spawn(async move {
+            while let Some(line) = stream.next().await {
                 match (|| {
                     ta_return!((), loga::Error);
                     let line = line.context("Error receiving line from child process")?;
-                    logger.info(line).context("Error sending child process line to syslog")?;
+                    syslogger.info(line).context("Error sending child process line to syslog")?;
                     return Ok(());
                 })() {
                     Ok(_) => (),
@@ -179,57 +167,28 @@ fn spawn_proc(
                     },
                 };
             }
-            return logger;
-        }
-    })) as LoggerRetFuture;
-    return Ok((child, pid, logger));
+        });
+        return Ok(());
+    }
+
+    log_stream(state, &log, task_id, child.stdout.take().unwrap())?;
+    log_stream(state, &log, task_id, child.stderr.take().unwrap())?;
+    return Ok((child, pid));
 }
 
-async fn gentle_stop_proc(
-    log: &Log,
-    pid: Pid,
-    mut child: Child,
-    logger: LoggerRetFuture,
-    stop_timeout: Option<SimpleDuration>,
-) {
+async fn gentle_stop_proc(log: &Log, pid: Pid, mut child: Child, stop_timeout: Option<SimpleDuration>) {
     if let Err(e) = rustix::process::kill_process(pid, Signal::Term) {
         log.log_err(loga::WARN, e.context("Error sending SIGTERM to child"));
     }
     select!{
         r = child.wait() => {
-            let log_msg = format!("Process ended with status: {:?}", r);
-            match logger.await {
-                Ok(mut logger) => {
-                    if let Err(e) = logger.info(log_msg) {
-                        log.log_err(loga::WARN, e.context("Error sending message to syslog"));
-                    }
-                },
-                Err(e) => {
-                    log.log_err(
-                        loga::WARN,
-                        loga::err(log_msg).also(e.context("Error recovering syslog forwarding logger")),
-                    );
-                },
-            }
+            log.log(loga::INFO, format!("Process ended with status: {:?}", r));
         },
         _ = sleep(stop_timeout.map(|x| x.into()).unwrap_or(Duration::from_secs(30))) => {
             if let Err(e) = rustix::process::kill_process(pid, Signal::Kill) {
                 log.log_err(loga::WARN, e.context("Error sending SIGKILL to child"));
             }
-            let log_msg = format!("Sent KILL: timeout after TERM");
-            match logger.await {
-                Ok(mut logger) => {
-                    if let Err(e) = logger.info(log_msg) {
-                        log.log_err(loga::WARN, e.context("Error sending message to syslog"));
-                    }
-                },
-                Err(e) => {
-                    log.log_err(
-                        loga::WARN,
-                        loga::err(log_msg).also(e.context("Error recovering syslog forwarding logger")),
-                    );
-                },
-            }
+            log.log(loga::INFO, format!("Sent KILL: timeout after TERM"));
         }
     }
 }
@@ -347,7 +306,7 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
 
                             let end_action: EndAction = async {
                                 // Execute
-                                let (mut child, pid, logger) = match spawn_proc(&state, &task_id, &spec.command) {
+                                let (mut child, pid) = match spawn_proc(&state, &task_id, &spec.command) {
                                     Ok(x) => x,
                                     Err(e) => {
                                         log.log_err(loga::WARN, e.context("Failed to launch process"));
@@ -431,27 +390,10 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                                         unreachable!();
                                     },
                                     r = child.wait() => {
-                                        let log_msg = format!("Process ended with status: {:?}", r);
-                                        match logger.await {
-                                            Ok(mut logger) => {
-                                                if let Err(e) = logger.info(log_msg) {
-                                                    log.log_err(
-                                                        loga::WARN,
-                                                        e.context("Error sending message to syslog"),
-                                                    );
-                                                }
-                                            },
-                                            Err(e) => {
-                                                log.log_err(
-                                                    loga::WARN,
-                                                    loga::err(
-                                                        log_msg,
-                                                    ).also(
-                                                        e.context("Error recovering syslog forwarder trying to send."),
-                                                    ),
-                                                );
-                                            },
-                                        }
+                                        log.log(
+                                            loga::INFO,
+                                            format!("Process prematurely exited with status: {:?}", r),
+                                        );
                                         {
                                             let mut state_dynamic = state.dynamic.lock().unwrap();
 
@@ -479,7 +421,7 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                                         }
 
                                         // Signal stop
-                                        gentle_stop_proc(&log, pid, child, logger, spec.stop_timeout).await;
+                                        gentle_stop_proc(&log, pid, child, spec.stop_timeout).await;
                                         return EndAction::Break;
                                     },
                                 }
@@ -546,7 +488,7 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                             }
 
                             let end_action: EndAction = async {
-                                let (mut child, pid, logger) = match spawn_proc(&state, &task_id, &spec.command) {
+                                let (mut child, pid) = match spawn_proc(&state, &task_id, &spec.command) {
                                     Ok(x) => x,
                                     Err(e) => {
                                         log.log_err(loga::WARN, e.context("Failed to launch process"));
@@ -578,7 +520,6 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                                 // Wait for exit
                                 select!{
                                     r = child.wait() => {
-                                        let logger = logger.await;
                                         let mut state_dynamic = state.dynamic.lock().unwrap();
                                         let task = get_task(&state_dynamic, &task_id);
                                         let specific =
@@ -609,30 +550,10 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                                                     }
                                                     return EndAction::Break(EndActionBreak { stopped: false });
                                                 } else {
-                                                    let log_msg =
-                                                        format!("Process ended with non-success result: {:?}", r);
-                                                    match logger {
-                                                        Ok(mut logger) => {
-                                                            if let Err(e) = logger.info(log_msg) {
-                                                                log.log_err(
-                                                                    loga::WARN,
-                                                                    e.context("Error sending message to syslog"),
-                                                                );
-                                                            }
-                                                        },
-                                                        Err(e1) => {
-                                                            log.log_err(
-                                                                loga::WARN,
-                                                                loga::err(
-                                                                    log_msg,
-                                                                ).also(
-                                                                    e1.context(
-                                                                        "Error recovering syslog forwarder trying to send.",
-                                                                    ),
-                                                                ),
-                                                            );
-                                                        },
-                                                    }
+                                                    log.log(
+                                                        loga::INFO,
+                                                        format!("Process exited with non-success result: {:?}", r),
+                                                    );
                                                     {
                                                         // Implicit drop: `specific` `task`.
                                                         //
@@ -646,25 +567,10 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                                                 }
                                             },
                                             Err(e) => {
-                                                let log_msg = format!("Process ended with unknown result: {:?}", e);
-                                                match logger {
-                                                    Ok(mut logger) => {
-                                                        if let Err(e) = logger.info(log_msg) {
-                                                            log.log_err(
-                                                                loga::WARN,
-                                                                e.context("Error sending message to syslog"),
-                                                            );
-                                                        };
-                                                    },
-                                                    Err(e1) => {
-                                                        log.log_err(
-                                                            loga::WARN,
-                                                            loga::err(
-                                                                log_msg,
-                                                            ).also(e1.context("Error recovering syslog forwarder")),
-                                                        );
-                                                    },
-                                                }
+                                                log.log_err(
+                                                    loga::INFO,
+                                                    e.context("Process ended with unknown result"),
+                                                );
 
                                                 // Implicit drop: `specific` `task`
                                                 //
@@ -684,7 +590,7 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                                             let task = get_task(&state_dynamic, &task_id);
                                             task.actual.set((Actual::Stopping, Utc::now()));
                                         }
-                                        gentle_stop_proc(&log, pid, child, logger, spec.stop_timeout).await;
+                                        gentle_stop_proc(&log, pid, child, spec.stop_timeout).await;
 
                                         // Stopped
                                         return EndAction::Break(EndActionBreak { stopped: true });

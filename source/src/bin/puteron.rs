@@ -56,6 +56,31 @@ pub struct LoadArgs {
     unique: Option<()>,
 }
 
+/// List upstream dependencies of a task. By default, this only shows strong,
+/// non-started dependencies (those that prevent the target task from starting).
+#[derive(Aargvark)]
+pub struct ListUpstreamArgs {
+    /// List upstreams of this task
+    task: TaskId,
+    include_started: Option<()>,
+    /// Shorthand for all `include-` options.
+    #[vark(flag = "--all", flag = "-a")]
+    all: Option<()>,
+}
+
+/// List downstream dependencies of a task. By default, this only shows strong,
+/// non-stopped dependencies (those that prevent the target task from stopping).
+#[derive(Aargvark)]
+pub struct ListDownstreamArgs {
+    /// List downstreams of this task
+    task: TaskId,
+    include_weak: Option<()>,
+    include_stopped: Option<()>,
+    /// Shorthand for all `include-` options.
+    #[vark(flag = "--all", flag = "-a")]
+    all: Option<()>,
+}
+
 #[derive(Aargvark)]
 #[vark(break_help)]
 enum ArgCommand {
@@ -97,9 +122,9 @@ enum ArgCommand {
     /// List tasks that are user-on.
     ListUserOn,
     /// List tasks upstream of a task, plus their control and current states.
-    ListUpstream(TaskId),
+    ListUpstream(ListUpstreamArgs),
     /// List tasks downstream of a task, plus their control and current states.
-    ListDownstream(TaskId),
+    ListDownstream(ListDownstreamArgs),
     /// Show the demon's effective environment variables
     Env,
     /// List the current schedule. This includes the next time of all scheduled tasks.
@@ -206,17 +231,18 @@ async fn main() {
             ArgCommand::ListUserOn => {
                 println!("{}", serde_json::to_string_pretty(&client_req(RequestTaskListUserOn).await?).unwrap());
             },
-            ArgCommand::ListUpstream(task_id) => {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&client_req(RequestTaskListUpstream(task_id)).await?).unwrap()
-                );
+            ArgCommand::ListUpstream(args) => {
+                println!("{}", serde_json::to_string_pretty(&client_req(RequestTaskListUpstream {
+                    task: args.task,
+                    include_started: args.include_started.is_some() || args.all.is_some(),
+                }).await?).unwrap());
             },
-            ArgCommand::ListDownstream(task_id) => {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&client_req(RequestTaskListDownstream(task_id)).await?).unwrap()
-                );
+            ArgCommand::ListDownstream(args) => {
+                println!("{}", serde_json::to_string_pretty(&client_req(RequestTaskListDownstream {
+                    task: args.task,
+                    include_stopped: args.include_stopped.is_some() || args.all.is_some(),
+                    include_weak: args.include_weak.is_some() || args.all.is_some(),
+                }).await?).unwrap());
             },
             ArgCommand::Env => {
                 let rt =

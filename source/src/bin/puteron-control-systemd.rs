@@ -11,7 +11,7 @@ use {
         ErrContext,
         ResultContext,
     },
-    puteron::ipc_util::run_dir,
+    puteron::run_dir,
     rustix::{
         process::{
             pidfd_open,

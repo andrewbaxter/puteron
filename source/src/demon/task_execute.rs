@@ -25,7 +25,7 @@ use {
             base::TaskId,
             ipc::Actual,
         },
-        ipc_util::run_dir,
+        run_dir,
         time::{
             SimpleDuration,
             SimpleDurationUnit,
@@ -56,6 +56,7 @@ use {
     },
     syslog::Formatter3164,
     tokio::{
+        fs::remove_file,
         io::{
             AsyncBufReadExt,
             AsyncRead,
@@ -306,6 +307,21 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
 
                             let end_action: EndAction = async {
                                 // Execute
+                                match &spec.started_check {
+                                    None => { },
+                                    Some(c) => match c {
+                                        interface::task::StartedCheck::TcpSocket(addr) => {
+                                            // nop
+                                        },
+                                        interface::task::StartedCheck::Path(c) => {
+                                            remove_file(&c).await.ignore();
+                                        },
+                                        interface::task::StartedCheck::RunPath(c) => shed!{
+                                            let c = run_dir().join(c);
+                                            remove_file(&c).await.ignore();
+                                        },
+                                    },
+                                }
                                 let (mut child, pid) = match spawn_proc(&state, &task_id, &spec.command) {
                                     Ok(x) => x,
                                     Err(e) => {
@@ -537,7 +553,11 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                                                             get_short_task_started_action(&specific.spec);
                                                         event_started(&state, &mut state_dynamic, &task_id);
                                                         match started_action {
-                                                            interface::task::ShortTaskStartedAction::None => { },
+                                                            interface::task::ShortTaskStartedAction::None => {
+                                                                return EndAction::Break(
+                                                                    EndActionBreak { stopped: false },
+                                                                );
+                                                            },
                                                             interface::task::ShortTaskStartedAction::TurnOff |
                                                             interface::task::ShortTaskStartedAction::Delete => {
                                                                 set_task_user_off(
@@ -545,10 +565,12 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                                                                     &mut state_dynamic,
                                                                     &task_id,
                                                                 );
+                                                                return EndAction::Break(
+                                                                    EndActionBreak { stopped: true },
+                                                                );
                                                             },
                                                         }
                                                     }
-                                                    return EndAction::Break(EndActionBreak { stopped: false });
                                                 } else {
                                                     log.log(
                                                         loga::INFO,

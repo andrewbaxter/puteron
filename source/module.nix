@@ -180,16 +180,11 @@ let
         (lib.attrsToList (buildSystemdHooks "mount"));
     };
 
-  # Generate at root + user levels
+  # Generate at root level
   root = build {
     levelName = "root";
     options = config.puteron;
     wantedBy = "multi-user.target";
-  };
-  user = build {
-    levelName = "user";
-    options = config.puteron.user;
-    wantedBy = "default.target";
   };
 in
 {
@@ -200,11 +195,7 @@ in
           enable = lib.mkOption {
             type = lib.types.bool;
             default = false;
-            description = "Enable the puteron service for managing tasks (services). This will create a systemd root and user unit to run puteron, with the task config directory in the Nix store plus an additional directory in `/etc/puteron/tasks` or `~/.config/puteron/tasks`.";
-          };
-          user = lib.mkOption {
-            default = { };
-            type = lib.types.submodule { options = options; };
+            description = "Enable the puteron service for managing tasks (services). This will create a systemd unit to run puteron, with the task config directory in the Nix store plus an additional directory in `/etc/puteron/tasks` or `~/.config/puteron/tasks`.";
           };
         } // options;
       };
@@ -256,10 +247,5 @@ in
     systemd.services = root.systemdServices;
     systemd.targets = root.systemdTargets;
     systemd.mounts = root.systemdMounts;
-
-    # Assemble user config
-    system.build.puteron.userScript = user.script;
-    systemd.user.services = user.systemdServices;
-    systemd.user.targets = user.systemdTargets;
   };
 }

@@ -525,7 +525,7 @@ async fn handle_ipc(state: Arc<State>, mut conn: ipc::ServerConn) {
                             if e.first {
                                 let task = get_task(&state_dynamic, &e.task_id);
                                 let actual = task.actual.get().0;
-                                if !m.include_started && actual == Actual::Started {
+                                if e.task_id != m.task && !m.include_started && actual == Actual::Started {
                                     continue;
                                 }
                                 frontier.push(Entry {
@@ -586,7 +586,7 @@ async fn handle_ipc(state: Arc<State>, mut conn: ipc::ServerConn) {
                             if e.first {
                                 let task = get_task(&state_dynamic, &e.task_id);
                                 let actual = task.actual.get().0;
-                                if !m.include_stopped && actual == Actual::Stopped {
+                                if e.task_id != m.task && !m.include_stopped && actual == Actual::Stopped {
                                     continue;
                                 }
                                 frontier.push(Entry {

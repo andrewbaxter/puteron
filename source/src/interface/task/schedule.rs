@@ -32,12 +32,20 @@ pub struct ScheduleHourly {
     pub minute: usize,
 }
 
+#[derive(Serialize, Deserialize, JsonSchema, Clone, PartialEq, Eq, Debug, Copy)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum Timezone {
+    Local,
+    Utc,
+}
+
 #[derive(Serialize, Deserialize, JsonSchema, Clone, PartialEq, Eq, Debug)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct RuleWeekly {
     // Lowercase, English (`monday`, `tuesday`, etc)
     pub weekday: Weekday,
     pub time: NaiveTime,
+    pub tz: Option<Timezone>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, PartialEq, Eq, Debug)]
@@ -46,6 +54,7 @@ pub struct RuleMonthly {
     // Starting at 1, clamped to month day range
     pub day: usize,
     pub time: NaiveTime,
+    pub tz: Option<Timezone>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, PartialEq, Eq, Debug)]
@@ -55,6 +64,7 @@ pub struct RuleYearly {
     // Starting at 1, clamped to month day range
     pub day: usize,
     pub time: NaiveTime,
+    pub tz: Option<Timezone>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, PartialEq, Eq, Debug)]

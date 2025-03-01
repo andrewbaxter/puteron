@@ -1,16 +1,19 @@
 use {
     super::state::StateDynamic,
-    crate::demon::state::TaskStateSpecific,
+    crate::{
+        demon::state::TaskStateSpecific,
+        interface::{
+            self,
+            base::TaskId,
+            task::schedule::Timezone,
+        },
+    },
     chrono::{
         DateTime,
         Datelike,
         Months,
         Timelike,
         Utc,
-    },
-    crate::interface::{
-        self,
-        base::TaskId,
     },
     rand::{
         thread_rng,
@@ -59,17 +62,21 @@ pub fn calc_next_instant(
             }
         },
         interface::task::schedule::Rule::Weekly(s) => {
-            next =
-                now.with_time(s.time).unwrap() +
+            let next1 =
+                now.date_naive().and_time(s.time) +
                     chrono::Duration::days(
                         s.weekday.num_days_from_monday() as i64 - now.weekday().num_days_from_monday() as i64,
                     );
+            next = match s.tz.unwrap_or(Timezone::Utc) {
+                Timezone::Local => next1.and_local_timezone(chrono::Local).unwrap().to_utc(),
+                Timezone::Utc => next1.and_utc(),
+            };
             if next < now {
                 next += chrono::Duration::days(7);
             }
         },
         interface::task::schedule::Rule::Monthly(s) => {
-            next = match now.date_naive().with_day(s.day as u32) {
+            let next1 = match now.date_naive().with_day(s.day as u32) {
                 Some(n) => n,
                 None => now
                     .date_naive()
@@ -79,17 +86,25 @@ pub fn calc_next_instant(
                     .unwrap()
                     .pred_opt()
                     .unwrap(),
-            }.and_time(s.time).and_utc();
+            }.and_time(s.time);
+            next = match s.tz.unwrap_or(Timezone::Utc) {
+                Timezone::Local => next1.and_local_timezone(chrono::Local).unwrap().to_utc(),
+                Timezone::Utc => next1.and_utc(),
+            };
             if next < now {
                 next = next.checked_add_months(Months::new(1)).unwrap();
             }
         },
         interface::task::schedule::Rule::Yearly(s) => {
             let next1 = now.date_naive().with_month(s.month.0.number_from_month()).unwrap();
-            next = match next1.with_day(s.day as u32) {
+            let next1 = match next1.with_day(s.day as u32) {
                 Some(n) => n,
                 None => next1.with_day(1).unwrap().checked_add_months(Months::new(1)).unwrap().pred_opt().unwrap(),
-            }.and_time(s.time).and_utc();
+            }.and_time(s.time);
+            next = match s.tz.unwrap_or(Timezone::Utc) {
+                Timezone::Local => next1.and_local_timezone(chrono::Local).unwrap().to_utc(),
+                Timezone::Utc => next1.and_utc(),
+            };
             if next < now {
                 next = next.checked_add_months(Months::new(12)).unwrap();
             }

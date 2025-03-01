@@ -310,7 +310,7 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                                 match &spec.started_check {
                                     None => { },
                                     Some(c) => match c {
-                                        interface::task::StartedCheck::TcpSocket(addr) => {
+                                        interface::task::StartedCheck::TcpSocket(_) => {
                                             // nop
                                         },
                                         interface::task::StartedCheck::Path(c) => {

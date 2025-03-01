@@ -3,6 +3,13 @@
   "title": "Config",
   "type": "object",
   "properties": {
+    "$schema": {
+      "writeOnly": true,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "environment": {
       "default": {
         "add": {},

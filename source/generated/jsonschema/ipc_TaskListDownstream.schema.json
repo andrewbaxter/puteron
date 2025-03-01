@@ -1,5 +1,22 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "RequestTaskListDownstream",
-  "type": "string"
+  "type": "object",
+  "required": [
+    "include_stopped",
+    "include_weak",
+    "task"
+  ],
+  "properties": {
+    "include_stopped": {
+      "type": "boolean"
+    },
+    "include_weak": {
+      "type": "boolean"
+    },
+    "task": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
 }

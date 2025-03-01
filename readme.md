@@ -6,6 +6,8 @@ Here's a quick comparison to systemd:
 
 - Represents tasks (services) as a graph (like systemd)
 
+- Service startup checks for dependency sequencing! Wait for a file to appear, or a socket to open
+
 - One-directional dependencies: no "wanted by", "part of", "binds to", etc
 
 - Separation of intent and execution - see `Control and actual state` below
@@ -18,49 +20,51 @@ Here's a quick comparison to systemd:
 
 # Architecture
 
+Puteron manages a graph of "tasks".
+
+Each task can depend on other tasks, referred to below as "upstream" dependencies (the simple converse of the relationship being "downstream"). An upstream dependency means that the task won't start until the upstream dependency has started, for all upstream dependencies.
+
+There are two types of dependencies:
+
+- `strong` dependencies - turning a task on will try to start the dependency too.  For example, `my-app` depends on `mysql`.
+
+- `weak` dependencies - the task won't start until the dependency turns on.
+
 ## Control and actual state
+
+The actual operation of Puteron is then determined by the "control" state.
 
 Tasks are either on or off (the "control state"), and started or stopped (or starting/stopping... the "actual state").
 
-The control state represents your intentions or the desired state of the system, and the actual state is the result of Puteron trying to establish that state while obeying dependency rules, dealing with failures, etc.
-
 ### Control state
 
-The control state is further divided into two parts: `direct_on` and `transitive_on`.
+The control state represents your intentions or the desired state of the system.  Puteron tries to make changes to match the desired state while obeying the constraints you've defined in the configs (dependencies, dependency strength, startup checks, etc).
+
+The control state is further divided into two three parts: `direct_on`, `transitive_on`, and `effective_on`.
 
 - `direct_on` is whether the user requested the task to run directly (i.e. by directly setting it to `default_on` or by running `task on`).
 
 - `transitive_on` is whether this task needs to be started for another task with `direct_on` to run via some chain of "strong" dependencies.
 
-These are logically OR'd to produce a single `on` value. To put it another way, a task is `on` if 1. the user says they need it specifically on or 2. if any other task the user says they need on (transitively) needs it.
+- `effective_on` or just `on` colloquially - `effective_on` is what Puteron uses to decide whether to start or stop a task. This is `(direct_on || transitive_on) && all_weak_upstream_effective_on` (if it's not clear, the 3rd is a value that's true when all `weak` upstream dependencies have `effective_on`).
 
-If a task is `on` Puteron will try to make sure it and all of its strong dependencies are running (start it, restart it if it failed, etc). If a task is `off` Puteron will try to make sure it's not running (stop it, force kill it if that fails) and stop any no-longer required dependencies.
+If a task is "on" Puteron will try to make sure it and all of its strong dependencies are running (start it, restart it if it failed, etc). If a task is "off" (not "on") Puteron will try to make sure it's not running (stop it, force kill it if that fails) and stop any no-longer required dependencies.
 
-You can see tasks which affect the `transitive_on` state of a task with `puteron list-downstream`.
+This also means that if a task is not directly on, and the task(s) making it `transitive_on` are turned off, then that task will also turn off.
+
+You can see the tasks which are enabling `transitive_on` of a task with `puteron list-downstream --transitive-on`.
 
 ### Actual state
 
-- `started` - it depends on the task type, but as an example, for perpetual tasks, the task is considered started only when
+Changes to "actual" state trigger Puteron to propagate control state - i.e. when the "actual" state of a task reaches `started` the downstream dependencies can be started, etc.
 
-  - the process is running
+The two most significant "actual" states are `started` and `stopped`.
 
-  - any startup check has passed
+- `stopped` - this is the initial state of all tasks.  Upstream dependencies won't stop until all of their downstreams have reached `stopped`.
 
-  A change in any of the above will cause the task to transition to/from `started`
+- `starting`, `stopping` - these are transitional states. `short` tasks are `starting` until the command completes, while `long` tasks are `starting` until their `started_check` passes (or immediately, if they have no started check).
 
-- `stopped` - when the task isn't `started`
-
-These two states are significant for dependency calculations/graph management.
-
-Under the hood though there's a more fine grained state (`starting`, `stopping`) but only the two above states affect whether dependencies will be started or stopped.
-
-### Starting and stopping tasks
-
-When a task becomes `on`, any `strong` upstream dependencies of the task will be started (per `transitive_on` behavior), the task itself wil be started, then any downstream dependencies that are `on` will be started.
-
-When a task becomes `off`, all downstream dependencies are stopped, the task itself is stopped, then upstream dependencies are stopped. once any dependents have stopped, the task will be stopped (if a processes, signalled), and once the process finishes for this task it will repeat for any dependencies that have also become `off`.
-
-Both of these processes respect dependencies: before any task is started all upstream dependencies must be started and before any task is stopped, any downstream dependencies must be stopped. Tasks will wait for these conditions to be true before state changes are initiated.
+- `started` - this is when the task is fully operational. Downstream dependencies won't start until all of their upstreams have reached `started`.
 
 # Using it, in a nutshell
 
@@ -80,8 +84,6 @@ Nix definitions are provided in
 
 - `source/module.nix` - Sets up `puteron` as a systemd unit and allows configuration via `config.puteron`, plus shortcuts for systemd interop (listening and control via puteron tasks).
 
-  Each entry in `config.puteron.tasks.*` is directly translated to JSON so you can use the same format for that, or deserialize from actual JSON directly.
-
 You can use it by doing
 
 ```nix
@@ -89,11 +91,13 @@ You can use it by doing
   modules = [ ./path/to/puteron/source/module.nix ];
   config = {
     puteron = {
-      ...
+      tasks.my_task = { type = "long"; ... };
     };
   };
 }
 ```
+
+Each entry in `config.puteron.tasks.*` is directly translated to JSON so you must use the same format for that, including capitalization, or you can deserialize from actual JSON directly.
 
 ## Reference
 
@@ -145,7 +149,7 @@ An example task: `sunwet.json`
 }
 ```
 
-(Specifying the schema is optional but will make VS Code provide autocomplete and check the config as you write it.)
+(Specifying the schema is optional but will make VS Code provide autocomplete and check the config as you write it, if you're writing JSON directly)
 
 An exampled scheduled task: `backup_b2.json`
 
@@ -170,23 +174,22 @@ with backup script:
 
 ```bash
 set -xeu
-puteron off sunwet-backup-lock
-puteron wait-until-stopped sunwet
 rclone --config /path/to/config sync /my/data default_remote:/my-bucket/local
-puteron on sunwet-backup-lock
 ```
 
 ### Interaction with systemd
 
-There are two hacks to work with systemd:
+There are two utilities/hacks to work with systemd:
 
-- `puteron-control-systemd`
+- Binary `puteron-control-systemd`
 
-  You can use this to allow the puteron graph to control systemd units. When run, it starts a specified service. When it's signaled to stop (sigint, sigterm) it stops the specified service.
+  This binary attempts to manage the state of a systemd unit.  When run, it starts the systemd unit.  When killed, it stops the systemd unit.  If the systemd unit exits on its own, `puteron-control-systemd` also exits.
+
+  You can use this to allow the puteron graph to control systemd units, by making a task that runs `puteron-control-systemd`.  When the task is started or stopped, the corresponding systemd unit will also be started or stopped.
 
 - You can add `ExecStartPost` and `ExecStopPre` commands to hook `puteron on` and `puteron off` with a proxy `empty` unit, to allow systemd to control the puteron graph.
 
-There's options to do these automatically in the provided nix files.
+There's options to do these automatically in the provided nix module.
 
 ### API
 

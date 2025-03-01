@@ -3,19 +3,32 @@
   "title": "TaskStatus",
   "type": "object",
   "required": [
+    "actual",
+    "actual_at",
     "direct_on",
     "direct_on_at",
+    "effective_on",
     "specific",
     "transitive_on",
     "transitive_on_at"
   ],
   "properties": {
+    "actual": {
+      "$ref": "#/definitions/Actual"
+    },
+    "actual_at": {
+      "type": "string",
+      "format": "date-time"
+    },
     "direct_on": {
       "type": "boolean"
     },
     "direct_on_at": {
       "type": "string",
       "format": "date-time"
+    },
+    "effective_on": {
+      "type": "boolean"
     },
     "specific": {
       "$ref": "#/definitions/TaskStatusSpecific"
@@ -30,7 +43,7 @@
   },
   "additionalProperties": false,
   "definitions": {
-    "ProcState": {
+    "Actual": {
       "type": "string",
       "enum": [
         "stopped",
@@ -41,12 +54,6 @@
     },
     "TaskStatusSpecific": {
       "oneOf": [
-        {
-          "type": "string",
-          "enum": [
-            "external"
-          ]
-        },
         {
           "type": "object",
           "required": [
@@ -87,27 +94,12 @@
     },
     "TaskStatusSpecificEmpty": {
       "type": "object",
-      "required": [
-        "started",
-        "started_at"
-      ],
-      "properties": {
-        "started": {
-          "type": "boolean"
-        },
-        "started_at": {
-          "type": "string",
-          "format": "date-time"
-        }
-      },
       "additionalProperties": false
     },
     "TaskStatusSpecificLong": {
       "type": "object",
       "required": [
-        "restarts",
-        "state",
-        "state_at"
+        "restarts"
       ],
       "properties": {
         "pid": {
@@ -121,13 +113,6 @@
           "type": "integer",
           "format": "uint",
           "minimum": 0.0
-        },
-        "state": {
-          "$ref": "#/definitions/ProcState"
-        },
-        "state_at": {
-          "type": "string",
-          "format": "date-time"
         }
       },
       "additionalProperties": false
@@ -135,9 +120,7 @@
     "TaskStatusSpecificShort": {
       "type": "object",
       "required": [
-        "restarts",
-        "state",
-        "state_at"
+        "restarts"
       ],
       "properties": {
         "pid": {
@@ -151,13 +134,6 @@
           "type": "integer",
           "format": "uint",
           "minimum": 0.0
-        },
-        "state": {
-          "$ref": "#/definitions/ProcState"
-        },
-        "state_at": {
-          "type": "string",
-          "format": "date-time"
         }
       },
       "additionalProperties": false

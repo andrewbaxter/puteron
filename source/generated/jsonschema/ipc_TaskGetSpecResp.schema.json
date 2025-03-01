@@ -9,6 +9,13 @@
         "type"
       ],
       "properties": {
+        "$schema": {
+          "writeOnly": true,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "default_on": {
           "description": "Sets default on initially when the task is created (ex: at puteron start)",
           "default": false,
@@ -39,6 +46,13 @@
         "type"
       ],
       "properties": {
+        "$schema": {
+          "writeOnly": true,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "command": {
           "description": "Command to run",
           "allOf": [
@@ -112,6 +126,13 @@
         "type"
       ],
       "properties": {
+        "$schema": {
+          "writeOnly": true,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "command": {
           "description": "Command to run",
           "allOf": [
@@ -381,6 +402,16 @@
         "time": {
           "type": "string",
           "format": "partial-date-time"
+        },
+        "tz": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Timezone"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false
@@ -412,6 +443,16 @@
         "time": {
           "type": "string",
           "format": "partial-date-time"
+        },
+        "tz": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Timezone"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "weekday": {
           "type": "string",
@@ -447,6 +488,16 @@
         "time": {
           "type": "string",
           "format": "partial-date-time"
+        },
+        "tz": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Timezone"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false
@@ -503,7 +554,27 @@
             }
           },
           "additionalProperties": false
+        },
+        {
+          "description": "Consider started when a file exists at the following path, relative to the \"run\" directory: either `/run` or the dir in the `XDG_RUNTIME_DIR` env var.",
+          "type": "object",
+          "required": [
+            "run_path"
+          ],
+          "properties": {
+            "run_path": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
         }
+      ]
+    },
+    "Timezone": {
+      "type": "string",
+      "enum": [
+        "local",
+        "utc"
       ]
     }
   }

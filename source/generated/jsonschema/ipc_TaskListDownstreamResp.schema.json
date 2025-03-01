@@ -1,11 +1,20 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "Map_of_TaskDependencyStatus",
+  "title": "Map_of_TaskDownstreamStatus",
   "type": "object",
   "additionalProperties": {
-    "$ref": "#/definitions/TaskDependencyStatus"
+    "$ref": "#/definitions/TaskDownstreamStatus"
   },
   "definitions": {
+    "Actual": {
+      "type": "string",
+      "enum": [
+        "stopped",
+        "starting",
+        "started",
+        "stopping"
+      ]
+    },
     "DependencyType": {
       "description": "All dependencies will prevent the dependent from starting until they've reached started state, and cause the dependent to stop when they leave started state. Additional behaviors are indicated in this struct.",
       "oneOf": [
@@ -24,28 +33,32 @@
         }
       ]
     },
-    "TaskDependencyStatus": {
+    "TaskDownstreamStatus": {
       "type": "object",
       "required": [
+        "actual",
         "dependency_type",
-        "on",
-        "related",
-        "started"
+        "downstream",
+        "effective_dependency_type",
+        "effective_on"
       ],
       "properties": {
+        "actual": {
+          "$ref": "#/definitions/Actual"
+        },
         "dependency_type": {
           "$ref": "#/definitions/DependencyType"
         },
-        "on": {
-          "type": "boolean"
-        },
-        "related": {
+        "downstream": {
           "type": "object",
           "additionalProperties": {
-            "$ref": "#/definitions/TaskDependencyStatus"
+            "$ref": "#/definitions/TaskDownstreamStatus"
           }
         },
-        "started": {
+        "effective_dependency_type": {
+          "$ref": "#/definitions/DependencyType"
+        },
+        "effective_on": {
           "type": "boolean"
         }
       },

@@ -131,6 +131,16 @@
         "time": {
           "type": "string",
           "format": "partial-date-time"
+        },
+        "tz": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Timezone"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false
@@ -162,6 +172,16 @@
         "time": {
           "type": "string",
           "format": "partial-date-time"
+        },
+        "tz": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Timezone"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "weekday": {
           "type": "string",
@@ -197,9 +217,26 @@
         "time": {
           "type": "string",
           "format": "partial-date-time"
+        },
+        "tz": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Timezone"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false
+    },
+    "Timezone": {
+      "type": "string",
+      "enum": [
+        "local",
+        "utc"
+      ]
     }
   }
 }

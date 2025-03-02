@@ -41,6 +41,13 @@ pub enum Timezone {
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, PartialEq, Eq, Debug)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct RuleDaily {
+    pub time: NaiveTime,
+    pub tz: Option<Timezone>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, PartialEq, Eq, Debug)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct RuleWeekly {
     // Lowercase, English (`monday`, `tuesday`, etc)
     pub weekday: Weekday,
@@ -72,7 +79,7 @@ pub struct RuleYearly {
 pub enum Rule {
     Period(RulePeriod),
     Hourly(MinuteSecond),
-    Daily(NaiveTime),
+    Daily(RuleDaily),
     Weekly(RuleWeekly),
     Monthly(RuleMonthly),
     Yearly(RuleYearly),

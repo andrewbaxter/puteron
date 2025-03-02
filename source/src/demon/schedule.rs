@@ -56,7 +56,11 @@ pub fn calc_next_instant(
             }
         },
         interface::task::schedule::Rule::Daily(s) => {
-            next = now.with_time(*s).unwrap();
+            let next1 = now.date_naive().and_time(s.time);
+            next = match s.tz.unwrap_or(Timezone::Utc) {
+                Timezone::Local => next1.and_local_timezone(chrono::Local).unwrap().to_utc(),
+                Timezone::Utc => next1.and_utc(),
+            };
             if next < now {
                 next += chrono::Duration::days(1);
             }

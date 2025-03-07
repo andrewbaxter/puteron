@@ -19,6 +19,7 @@ use {
                 },
                 ipc_path,
                 Actual,
+                Event,
                 RespScheduleEntry,
                 TaskDownstreamStatus,
                 TaskStatus,
@@ -36,7 +37,10 @@ use {
         Aargvark,
     },
     chrono::Utc,
-    flowcontrol::ta_return,
+    flowcontrol::{
+        shed,
+        ta_return,
+    },
     loga::{
         ea,
         DebugDisplay,
@@ -47,6 +51,7 @@ use {
     schedule::{
         pop_schedule,
         populate_schedule,
+        ScheduleEvent,
     },
     state::{
         State,
@@ -60,6 +65,7 @@ use {
             Arc,
             Mutex,
         },
+        time::Duration,
     },
     task_create_delete::{
         build_task,
@@ -67,12 +73,12 @@ use {
         validate_new_task,
     },
     task_execute::{
-        set_task_user_off,
-        set_task_user_on,
+        set_task_direct_off,
+        set_task_direct_on,
     },
     task_util::{
         get_task,
-        is_task_effective_on,
+        is_control_effective_on,
         maybe_get_task,
         walk_task_upstream,
     },
@@ -81,6 +87,7 @@ use {
         signal::unix::SignalKind,
         spawn,
         sync::{
+            broadcast,
             oneshot,
             Notify,
         },
@@ -99,7 +106,11 @@ pub struct DemonRunArgs {
     validate: Option<()>,
 }
 
-pub async fn main(log: &Log, args: DemonRunArgs) -> Result<(), loga::Error> {
+fn watcher_timeout() -> Duration {
+    return Duration::from_secs(10);
+}
+
+pub async fn main(debug: bool, log: &Log, args: DemonRunArgs) -> Result<(), loga::Error> {
     let config = args.config.value;
     let mut specs = merge_specs(log, &config.task_dirs, None).await?;
 
@@ -115,6 +126,8 @@ pub async fn main(log: &Log, args: DemonRunArgs) -> Result<(), loga::Error> {
     // # Create state
     let notify_reschedule = Arc::new(Notify::new());
     let state = Arc::new(State {
+        debug: debug,
+        shutdown: Default::default(),
         log: log.clone(),
         task_dirs: config.task_dirs,
         env: env,
@@ -124,6 +137,8 @@ pub async fn main(log: &Log, args: DemonRunArgs) -> Result<(), loga::Error> {
             schedule_top: Default::default(),
             schedule: Default::default(),
             notify_reschedule: notify_reschedule.clone(),
+            watchers: Default::default(),
+            watchers_send: Default::default(),
         }),
         tokio_tasks: Default::default(),
     });
@@ -210,7 +225,7 @@ pub async fn main(log: &Log, args: DemonRunArgs) -> Result<(), loga::Error> {
             if !direct_on {
                 continue;
             }
-            set_task_user_on(&state, &mut state_dynamic, &id);
+            set_task_direct_on(&state, &mut state_dynamic, &id);
         }
 
         // ## Schedule tasks
@@ -224,84 +239,98 @@ pub async fn main(log: &Log, args: DemonRunArgs) -> Result<(), loga::Error> {
     let mut sigint = tokio::signal::unix::signal(SignalKind::interrupt()).context("Error hooking into SIGINT")?;
     let mut sigterm = tokio::signal::unix::signal(SignalKind::terminate()).context("Error hooking into SIGTERM")?;
     let state = state.clone();
-
-    fn task_off_all(state: &Arc<State>) {
-        let mut state_dynamic = state.dynamic.lock().unwrap();
-        for task_id in state_dynamic.tasks.keys().cloned().collect::<Vec<_>>() {
-            set_task_user_off(state, &mut state_dynamic, &task_id);
-        }
-    }
-
-    let mut message_socket;
-    if let Some(ipc_path) = ipc_path() {
-        message_socket = Some(ipc::Server::new(ipc_path).await.map_err(loga::err)?);
-    } else {
-        message_socket = None;
-    }
-    let mut sigint = Box::pin(sigint.recv());
-    let mut sigterm = Box::pin(sigterm.recv());
-    loop {
-        select!{
-            _ =& mut sigint => {
-                log.log(loga::DEBUG, "Got SIGINT, shutting down.");
-                task_off_all(&state);
-                break;
-            },
-            _ =& mut sigterm => {
-                log.log(loga::DEBUG, "Got SIGTERM, shutting down.");
-                task_off_all(&state);
-                break;
+    {
+        fn task_off_all(state: &Arc<State>) {
+            let mut state_dynamic = state.dynamic.lock().unwrap();
+            for task_id in state_dynamic.tasks.keys().cloned().collect::<Vec<_>>() {
+                set_task_direct_off(state, &mut state_dynamic, &task_id);
             }
-            accepted = message_socket.as_mut().unwrap().accept(),
-            if message_socket.is_some() => {
-                let stream = match accepted {
-                    Ok(x) => x,
-                    Err(e) => {
-                        log.log_err(loga::DEBUG, loga::err(e).context("Error accepting connection"));
-                        continue;
-                    },
-                };
-                spawn(handle_ipc(state.clone(), stream));
-            },
-            _ = notify_reschedule.notified() => {
-                let mut state_dynamic = state.dynamic.lock().unwrap();
-                if let Some((delay, spec)) = schedule_next {
-                    state_dynamic.schedule.entry(delay).or_default().push(spec);
+        }
+
+        let mut message_socket;
+        if let Some(ipc_path) = ipc_path() {
+            message_socket = Some(ipc::Server::new(ipc_path).await.map_err(loga::err)?);
+        } else {
+            message_socket = None;
+        }
+        let mut sigint = Box::pin(sigint.recv());
+        let mut sigterm = Box::pin(sigterm.recv());
+        loop {
+            select!{
+                _ =& mut sigint => {
+                    log.log(loga::DEBUG, "Got SIGINT, shutting down.");
+                    task_off_all(&state);
+                    break;
+                },
+                _ =& mut sigterm => {
+                    log.log(loga::DEBUG, "Got SIGTERM, shutting down.");
+                    task_off_all(&state);
+                    break;
                 }
-                schedule_next = pop_schedule(&mut state_dynamic);
-            },
-            _ = async {
-                if let Some((delay, _)) = schedule_next.as_ref() {
-                    sleep_until(*delay).await;
+                accepted = message_socket.as_mut().unwrap().accept(),
+                if message_socket.is_some() => {
+                    let stream = match accepted {
+                        Ok(x) => x,
+                        Err(e) => {
+                            log.log_err(loga::DEBUG, loga::err(e).context("Error accepting connection"));
+                            continue;
+                        },
+                    };
+                    spawn(handle_ipc(state.clone(), stream));
+                },
+                _ = notify_reschedule.notified() => {
+                    let mut state_dynamic = state.dynamic.lock().unwrap();
+                    if let Some((delay, spec)) = schedule_next {
+                        state_dynamic.schedule.entry(delay).or_default().push(spec);
+                    }
+                    schedule_next = pop_schedule(&mut state_dynamic);
+                },
+                _ = async {
+                    if let Some((delay, _)) = schedule_next.as_ref() {
+                        sleep_until(*delay).await;
+                    }
+                },
+                if schedule_next.is_some() => {
+                    let (_, event) = schedule_next.unwrap();
+                    let mut state_dynamic = state.dynamic.lock().unwrap();
+                    match event {
+                        ScheduleEvent::Rule(spec) => {
+                            log.log_with(
+                                loga::DEBUG,
+                                "Timer triggered for scheduled task, turning on.",
+                                ea!(task = spec.0, schedule = spec.1.dbg_str()),
+                            );
+                            set_task_direct_on(&state, &mut state_dynamic, &spec.0);
+                            state_dynamic
+                                .schedule
+                                .entry(schedule::calc_next_instant(Utc::now(), Instant::now(), &spec.1, false))
+                                .or_default()
+                                .push(ScheduleEvent::Rule(spec));
+                        },
+                        ScheduleEvent::WatcherExpire(pid) => {
+                            if let Some((last_active, _receiver)) = state_dynamic.watchers.get(&pid) {
+                                if Instant::now().duration_since(*last_active) > watcher_timeout() {
+                                    state_dynamic.watchers.remove(&pid);
+                                }
+                            }
+                        },
+                    }
+                    schedule_next = schedule::pop_schedule(&mut state_dynamic);
                 }
-            },
-            if schedule_next.is_some() => {
-                let (_, spec) = schedule_next.unwrap();
-                let mut state_dynamic = state.dynamic.lock().unwrap();
-                log.log_with(
-                    loga::DEBUG,
-                    "Timer triggered for scheduled task, turning on.",
-                    ea!(task = spec.0, schedule = spec.1.dbg_str()),
-                );
-                set_task_user_on(&state, &mut state_dynamic, &spec.0);
-                state_dynamic
-                    .schedule
-                    .entry(schedule::calc_next_instant(Utc::now(), Instant::now(), &spec.1, false))
-                    .or_default()
-                    .push(spec);
-                schedule_next = schedule::pop_schedule(&mut state_dynamic);
             }
         }
     }
 
     // Waits for all tasks
     state.tokio_tasks.close();
+    state.shutdown.cancel();
     state.tokio_tasks.wait().await;
     return Ok(());
 }
 
 async fn handle_ipc(state: Arc<State>, mut conn: ipc::ServerConn) {
     let log = state.log.fork(ea!(sys = "ipc"));
+    let peer = conn.0.peer_cred().map_err(|e| format!("Error getting IPC connection peer information: {}", e));
     loop {
         let req = match conn.recv_req().await {
             Ok(Some(message)) => message,
@@ -316,12 +345,97 @@ async fn handle_ipc(state: Arc<State>, mut conn: ipc::ServerConn) {
         let resp = {
             let state = state.clone();
             let log = log.clone();
+            let peer = peer.clone();
             async move {
                 ta_return!(ipc::ServerResp, String);
                 match req {
                     ipc::ServerReq::TaskList(rr, _) => {
                         let state_dynamic = state.dynamic.lock().unwrap();
                         return Ok(rr(state_dynamic.tasks.keys().cloned().collect()));
+                    },
+                    ipc::ServerReq::TaskWatch(rr, _) => {
+                        let peer = peer?;
+                        let pid = peer.pid().ok_or_else(|| format!("IPC connection missing PID information"))?;
+                        let mut out = vec![];
+
+                        // Create or get existing receiver if pid already subscribed
+                        let mut receiver = shed!{
+                            let mut state_dynamic = state.dynamic.lock().unwrap();
+                            if let Some((_, receiver)) = state_dynamic.watchers.remove(&pid) {
+                                break receiver;
+                            };
+                            for (task_id, task) in state_dynamic.tasks.iter() {
+                                let task = &state_dynamic.task_alloc[*task];
+                                out.push(Event {
+                                    task: task_id.clone(),
+                                    event_type: interface::ipc::EventType::DirectOn(task.direct_on.get().0),
+                                });
+                                out.push(Event {
+                                    task: task_id.clone(),
+                                    event_type: interface::ipc::EventType::Actual(task.actual.get().0),
+                                });
+                            }
+                            let sender =
+                                state_dynamic.watchers_send.take().unwrap_or_else(|| broadcast::Sender::new(1000));
+                            let receiver = sender.subscribe();
+                            state_dynamic.watchers_send = Some(sender);
+                            break receiver;
+                        };
+
+                        // Read queued events or wait for next event
+                        'loop_ : loop {
+                            // Read anything queued
+                            shed!{
+                                match receiver.try_recv() {
+                                    Ok(v) => {
+                                        out.push(v);
+                                    },
+                                    Err(e) => match e {
+                                        broadcast::error::TryRecvError::Empty => {
+                                            if out.is_empty() {
+                                                break;
+                                            } else {
+                                                break 'loop_;
+                                            }
+                                        },
+                                        broadcast::error::TryRecvError::Closed => {
+                                            break 'loop_;
+                                        },
+                                        broadcast::error::TryRecvError::Lagged(_) => {
+                                            return Err(format!("Too slow reading events, connection broken"));
+                                        },
+                                    },
+                                }
+                            }
+
+                            // Wait for next if none yet, then read anything queued
+                            match receiver.recv().await {
+                                Ok(v) => {
+                                    out.push(v);
+                                },
+                                Err(e) => match e {
+                                    broadcast::error::RecvError::Closed => {
+                                        break 'loop_;
+                                    },
+                                    broadcast::error::RecvError::Lagged(_) => {
+                                        return Err(format!("Too slow reading events, connection broken"));
+                                    },
+                                },
+                            }
+                        }
+
+                        // Park receiver until next ipc or it expires
+                        {
+                            let mut state_dynamic = state.dynamic.lock().unwrap();
+                            state_dynamic.watchers.insert(pid, (Instant::now(), receiver));
+                            state_dynamic
+                                .schedule
+                                .entry(Instant::now() + watcher_timeout())
+                                .or_default()
+                                .push(ScheduleEvent::WatcherExpire(pid));
+                            state_dynamic.notify_reschedule.notify_one();
+                        }
+                        return Ok(rr(out));
                     },
                     ipc::ServerReq::TaskAdd(rr, m) => {
                         let mut state_dynamic = state.dynamic.lock().unwrap();
@@ -361,7 +475,7 @@ async fn handle_ipc(state: Arc<State>, mut conn: ipc::ServerConn) {
                         }
 
                         // # Create task
-                        let user_on = match &m.spec {
+                        let direct_on = match &m.spec {
                             Task::Empty(s) => s.default_on,
                             Task::Long(s) => s.default_on,
                             Task::Short(s) => s.default_on,
@@ -369,8 +483,8 @@ async fn handle_ipc(state: Arc<State>, mut conn: ipc::ServerConn) {
                         build_task(&mut state_dynamic, m.task.clone(), m.spec);
 
                         // # Turn on maybe
-                        if user_on {
-                            set_task_user_on(&state, &mut state_dynamic, &m.task);
+                        if direct_on {
+                            set_task_direct_on(&state, &mut state_dynamic, &m.task);
                         }
                         return Ok(rr(()));
                     },
@@ -395,7 +509,7 @@ async fn handle_ipc(state: Arc<State>, mut conn: ipc::ServerConn) {
                             direct_on_at: task.direct_on.get().1,
                             transitive_on: task.transitive_on.get().0,
                             transitive_on_at: task.transitive_on.get().1,
-                            effective_on: is_task_effective_on(task),
+                            effective_on: is_control_effective_on(task),
                             actual: task.actual.get().0,
                             actual_at: task.actual.get().1,
                             specific: match &task.specific {
@@ -442,10 +556,10 @@ async fn handle_ipc(state: Arc<State>, mut conn: ipc::ServerConn) {
                             return Err(format!("Unknown task [{}]", m.task));
                         }
                         if m.on {
-                            set_task_user_on(&state, &mut state_dynamic, &m.task);
+                            set_task_direct_on(&state, &mut state_dynamic, &m.task);
                             return Ok(rr(()));
                         } else {
-                            set_task_user_off(&state, &mut state_dynamic, &m.task);
+                            set_task_direct_off(&state, &mut state_dynamic, &m.task);
                             return Ok(rr(()));
                         }
                     },
@@ -535,7 +649,7 @@ async fn handle_ipc(state: Arc<State>, mut conn: ipc::ServerConn) {
                                 });
                                 let push_status;
                                 push_status = TaskUpstreamStatus {
-                                    effective_on: is_task_effective_on(task),
+                                    effective_on: is_control_effective_on(task),
                                     actual: actual,
                                     dependency_type: e.dependency_type,
                                     upstream: HashMap::new(),
@@ -597,7 +711,7 @@ async fn handle_ipc(state: Arc<State>, mut conn: ipc::ServerConn) {
                                 });
                                 let push_status;
                                 push_status = TaskDownstreamStatus {
-                                    effective_on: is_task_effective_on(task),
+                                    effective_on: is_control_effective_on(task),
                                     actual: task.actual.get().0,
                                     dependency_type: e.dependency_type,
                                     effective_dependency_type: e.effective_dependency_type,
@@ -637,6 +751,9 @@ async fn handle_ipc(state: Arc<State>, mut conn: ipc::ServerConn) {
                         out.reserve(state_dynamic.schedule.len() + 1);
                         #[allow(for_loops_over_fallibles)]
                         for (at, entry) in &state_dynamic.schedule_top {
+                            let ScheduleEvent::Rule(entry) = entry else {
+                                continue;
+                            };
                             let at_secs: i64 = match at.duration_since(instant_now).as_secs().try_into() {
                                 Ok(s) => s,
                                 Err(e) => {
@@ -658,6 +775,9 @@ async fn handle_ipc(state: Arc<State>, mut conn: ipc::ServerConn) {
                         }
                         for (at, entries) in &state_dynamic.schedule {
                             for entry in entries {
+                                let ScheduleEvent::Rule(entry) = entry else {
+                                    continue;
+                                };
                                 let at_secs: i64 = match at.duration_since(instant_now).as_secs().try_into() {
                                     Ok(s) => s,
                                     Err(e) => {

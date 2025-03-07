@@ -2,6 +2,7 @@ use {
     super::{
         schedule::{
             calc_next_instant,
+            ScheduleEvent,
             ScheduleRule,
         },
         state::{
@@ -14,18 +15,18 @@ use {
         },
         task_util::{
             get_task,
-            is_task_effective_on,
+            is_control_effective_on,
             maybe_get_task,
             walk_task_upstream,
         },
     },
-    chrono::Utc,
     crate::interface::{
         self,
         base::TaskId,
         ipc::Actual,
         task::Task,
     },
+    chrono::Utc,
     std::cell::{
         Cell,
         RefCell,
@@ -123,7 +124,7 @@ pub(crate) fn build_task(state_dynamic: &mut StateDynamic, task_id: TaskId, spec
                     .schedule
                     .entry(calc_next_instant(Utc::now(), Instant::now(), rule, true))
                     .or_default()
-                    .push(ScheduleRule::new((task_id.clone(), rule.clone())));
+                    .push(ScheduleEvent::Rule(ScheduleRule::new((task_id.clone(), rule.clone()))));
             }
             state_dynamic.notify_reschedule.notify_one();
             for (upstream_id, upstream_type) in &spec.upstream {
@@ -154,7 +155,7 @@ pub(crate) fn build_task(state_dynamic: &mut StateDynamic, task_id: TaskId, spec
                 match *upstream_type {
                     interface::task::DependencyType::Strong => { },
                     interface::task::DependencyType::Weak => {
-                        if !is_task_effective_on(&get_task(state_dynamic, upstream_id)) {
+                        if !is_control_effective_on(&get_task(state_dynamic, upstream_id)) {
                             all_on = false;
                             break;
                         }
@@ -190,6 +191,9 @@ pub(crate) fn delete_task(state_dynamic: &mut StateDynamic, task_id: &TaskId) {
     let mut modified = false;
     state_dynamic.schedule.retain(|_, v| {
         v.retain(|r| {
+            let ScheduleEvent::Rule(r) = r else {
+                return true;
+            };
             let keep = r.0 != *task_id;
             if !keep {
                 modified = true;

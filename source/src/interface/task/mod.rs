@@ -108,6 +108,10 @@ pub struct TaskSpecLong {
     /// How long to wait between restarts when the command fails. Defaults to 60s.
     #[serde(default)]
     pub restart_delay: Option<SimpleDuration>,
+    /// If set, the restart delay doubles each attempt until it reaches the max. After
+    /// that each retry will wait for the maximum duration since the previous.
+    #[serde(default)]
+    pub restart_delay_max: Option<SimpleDuration>,
     /// How long to wait before force killing the process if it fails to stop. Defaults
     /// to 30s.
     pub stop_timeout: Option<SimpleDuration>,
@@ -153,6 +157,10 @@ pub struct TaskSpecShort {
     /// How long to wait between restarts when the command exits. Defaults to 60s.
     #[serde(default)]
     pub restart_delay: Option<SimpleDuration>,
+    /// If set, the restart delay doubles each attempt until it reaches the max. After
+    /// that each retry will wait for the maximum duration since the previous.
+    #[serde(default)]
+    pub restart_delay_max: Option<SimpleDuration>,
     /// How long to wait before force killing the process if it fails to stop. Defaults
     /// to 30s.
     pub stop_timeout: Option<SimpleDuration>,

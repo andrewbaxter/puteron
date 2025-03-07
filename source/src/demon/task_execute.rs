@@ -1,24 +1,28 @@
 use {
-    super::{
-        state::{
-            State,
-            StateDynamic,
-            TaskStateSpecific,
-        },
-        task_plan::{
-            plan_event_started,
-            plan_event_stopped,
-            plan_event_stopping,
-            plan_set_task_direct_off,
-            plan_set_task_direct_on,
-            ExecutePlan,
-        },
-        task_util::get_short_task_started_action,
-    },
+    super::task_plan::sanity_check,
     crate::{
         demon::{
+            state::{
+                State,
+                StateDynamic,
+                TaskStateSpecific,
+            },
             task_create_delete::delete_task,
-            task_util::get_task,
+            task_plan::{
+                plan_event_started,
+                plan_event_stopped,
+                plan_event_stopping,
+                plan_set_direct_off,
+                plan_set_direct_on,
+                sync_actual_should_start_downstream,
+                sync_actual_should_stop_related,
+                ExecutePlan,
+            },
+            task_util::{
+                get_short_task_started_action,
+                get_task,
+                is_control_effective_on,
+            },
         },
         interface::{
             self,
@@ -44,6 +48,7 @@ use {
         Log,
         ResultContext,
     },
+    rand::Rng,
     rustix::{
         process::Signal,
         termios::Pid,
@@ -53,6 +58,7 @@ use {
         process::Stdio,
         sync::Arc,
         time::Duration,
+        u32,
     },
     syslog::Formatter3164,
     tokio::{
@@ -69,6 +75,7 @@ use {
         },
         select,
         sync::oneshot,
+        task::spawn_blocking,
         time::{
             sleep,
             timeout,
@@ -97,7 +104,7 @@ fn log_stopped(state: &State, task_id: &TaskId) {
 }
 
 fn spawn_proc(
-    state: &State,
+    state: &Arc<State>,
     task_id: &TaskId,
     spec: &interface::task::Command,
 ) -> Result<(Child, Pid), loga::Error> {
@@ -140,33 +147,72 @@ fn spawn_proc(
 
     // Stdout/err -> syslog 2
     fn log_stream(
-        state: &State,
+        state: &Arc<State>,
         log: &Log,
         task_id: &TaskId,
         stream: impl AsyncRead + 'static + Unpin + Send + Sync,
     ) -> Result<(), loga::Error> {
-        let mut syslogger = syslog::unix(Formatter3164 {
-            facility: syslog::Facility::LOG_USER,
-            process: task_id.clone(),
-            hostname: None,
-            pid: 0,
-        })?;
-        let log = log.clone();
-        let mut stream = LinesStream::new(BufReader::new(stream).lines());
-        state.tokio_tasks.spawn(async move {
-            while let Some(line) = stream.next().await {
-                match (|| {
-                    ta_return!((), loga::Error);
-                    let line = line.context("Error receiving line from child process")?;
-                    syslogger.info(line).context("Error sending child process line to syslog")?;
-                    return Ok(());
-                })() {
-                    Ok(_) => (),
-                    // Syslog restarting? or something
-                    Err(e) => {
-                        log.log_err(loga::WARN, e.context("Error forwarding child output line"));
-                    },
+        state.tokio_tasks.spawn({
+            let mut syslogger = syslog::unix(Formatter3164 {
+                facility: syslog::Facility::LOG_USER,
+                process: task_id.clone(),
+                hostname: None,
+                pid: 0,
+            })?;
+            let log = log.clone();
+            let mut stream = LinesStream::new(BufReader::new(stream).lines());
+            let state = state.clone();
+            async move {
+                let shutdown_timeout = {
+                    let cancel = state.shutdown.clone();
+                    let log = log.clone();
+                    async move {
+                        cancel.cancelled().await;
+                        sleep(Duration::from_secs(15)).await;
+                        log.log(loga::WARN, format!("Task logger didn't exit in 15s since shutdown, giving up."));
+                    }
                 };
+                let work = async move {
+                    while let Some(line) = stream.next().await {
+                        match spawn_blocking(move || {
+                            match (|| {
+                                ta_return!((), loga::Error);
+                                let line = line.context("Error receiving line from child process")?;
+                                syslogger.info(line).context("Error sending child process line to syslog")?;
+                                return Ok(());
+                            })() {
+                                Ok(_) => {
+                                    return (syslogger, Ok(()));
+                                },
+                                Err(e) => {
+                                    return (syslogger, Err(e));
+                                },
+                            }
+                        }).await {
+                            Err(e) => {
+                                log.log_err(
+                                    loga::WARN,
+                                    e.context("Error joining blocking task; syslogger lost, aborting logging"),
+                                );
+                                break;
+                            },
+                            Ok((l, Ok(_))) => {
+                                syslogger = l;
+                            },
+                            // Syslog restarting? or something
+                            Ok((l, Err(e))) => {
+                                log.log_err(loga::WARN, e.context("Error forwarding child output line"));
+                                syslogger = l;
+                            },
+                        };
+                    }
+                };
+                select!{
+                    _ = shutdown_timeout => {
+                    },
+                    _ = work => {
+                    }
+                }
             }
         });
         return Ok(());
@@ -204,11 +250,18 @@ fn event_stopping(state: &Arc<State>, state_dynamic: &mut StateDynamic, task_id:
     execute(state, state_dynamic, plan);
 }
 
+enum EventStartedAction {
+    None,
+    SetOff,
+}
+
 /// After state change
-fn event_started(state: &Arc<State>, state_dynamic: &mut StateDynamic, task_id: &TaskId) {
-    let mut plan = ExecutePlan::default();
-    plan_event_started(state_dynamic, &mut plan, task_id);
-    execute(state, state_dynamic, plan);
+fn event_started(
+    state: &Arc<State>,
+    state_dynamic: &mut StateDynamic,
+    task_id: &TaskId,
+    extra_action: EventStartedAction,
+) {
     let task = get_task(state_dynamic, task_id);
     for waiter in task.stopped_waiters.borrow_mut().split_off(0) {
         _ = waiter.send(false);
@@ -216,14 +269,25 @@ fn event_started(state: &Arc<State>, state_dynamic: &mut StateDynamic, task_id: 
     for waiter in task.started_waiters.borrow_mut().split_off(0) {
         _ = waiter.send(true);
     }
+    let mut plan = ExecutePlan::default();
+    match extra_action {
+        EventStartedAction::None => { },
+        EventStartedAction::SetOff => {
+            plan_set_direct_off(state_dynamic, &mut plan, task_id);
+        },
+    }
+    eprintln!("{} started - effective on {}", task_id, is_control_effective_on(task));
+    if !is_control_effective_on(task) {
+        sync_actual_should_stop_related(state_dynamic, &mut plan, task_id);
+    } else {
+        plan_event_started(state_dynamic, &mut plan, task_id);
+    }
+    execute(state, state_dynamic, plan);
 }
 
 /// After state change
 fn event_stopped(state: &Arc<State>, state_dynamic: &mut StateDynamic, task_id: &TaskId) {
     log_stopped(state, task_id);
-    let mut plan = ExecutePlan::default();
-    plan_event_stopped(state_dynamic, &mut plan, task_id);
-    execute(state, state_dynamic, plan);
     let task = get_task(state_dynamic, task_id);
     for waiter in task.stopped_waiters.borrow_mut().split_off(0) {
         _ = waiter.send(true);
@@ -231,41 +295,91 @@ fn event_stopped(state: &Arc<State>, state_dynamic: &mut StateDynamic, task_id: 
     for waiter in task.started_waiters.borrow_mut().split_off(0) {
         _ = waiter.send(false);
     }
-}
-
-pub(crate) fn set_task_user_on(state: &Arc<State>, state_dynamic: &mut StateDynamic, root_task_id: &TaskId) {
     let mut plan = ExecutePlan::default();
-    plan_set_task_direct_on(state_dynamic, &mut plan, root_task_id);
+    if is_control_effective_on(task) {
+        // Restart
+        sync_actual_should_start_downstream(state_dynamic, &mut plan, task_id, task);
+    } else {
+        plan_event_stopped(state_dynamic, &mut plan, task_id);
+    }
     execute(state, state_dynamic, plan);
 }
 
-pub(crate) fn set_task_user_off(state: &Arc<State>, state_dynamic: &mut StateDynamic, task_id: &TaskId) {
+pub(crate) fn set_task_direct_on(state: &Arc<State>, state_dynamic: &mut StateDynamic, root_task_id: &TaskId) {
     let mut plan = ExecutePlan::default();
-    plan_set_task_direct_off(state_dynamic, &mut plan, task_id);
+    plan_set_direct_on(state_dynamic, &mut plan, root_task_id);
     execute(state, state_dynamic, plan);
 }
 
-macro_rules! handle_short_stopped2{
+pub(crate) fn set_task_direct_off(state: &Arc<State>, state_dynamic: &mut StateDynamic, task_id: &TaskId) {
+    let mut plan = ExecutePlan::default();
+    plan_set_direct_off(state_dynamic, &mut plan, task_id);
+    execute(state, state_dynamic, plan);
+}
+
+macro_rules! event_short_stopped2{
     // Work around borrow rules preventing code reuse
     ($state: expr, $state_dynamic: expr, $task_id: expr, $task: expr, $specific: expr) => {
         $task.actual.set((Actual::Stopped, Utc::now()));
         $specific.pid.set(None);
-        let started_action = get_short_task_started_action(&$specific.spec);
         event_stopped(&$state, $state_dynamic, &$task_id);
-        if started_action == interface:: task:: ShortTaskStartedAction:: Delete {
-            delete_task($state_dynamic, &$task_id);
-        }
     };
 }
 
-fn handle_short_stopped(state: &Arc<State>, task_id: &TaskId) {
+fn event_short_stopped(state: &Arc<State>, task_id: &TaskId) {
     let mut state_dynamic = state.dynamic.lock().unwrap();
     let task = get_task(&state_dynamic, &task_id);
     let specific = exenum!(&task.specific, TaskStateSpecific:: Short(s) => s).unwrap();
-    handle_short_stopped2!(state, &mut state_dynamic, task_id, task, specific);
+    event_short_stopped2!(state, &mut state_dynamic, task_id, task, specific);
+}
+
+struct RestartCounter {
+    min: Duration,
+    max: Duration,
+    max_count: u32,
+    count: u32,
+}
+
+impl RestartCounter {
+    fn new(min: Option<SimpleDuration>, max: Option<SimpleDuration>) -> Self {
+        let min = Duration::from(min.unwrap_or(SimpleDuration {
+            count: 1,
+            unit: SimpleDurationUnit::Minute,
+        }).into());
+        let max = max.map(<SimpleDuration as Into<Duration>>::into).unwrap_or(min).max(min);
+        let max_count = (max.as_secs() as f64 / min.as_secs() as f64).log2().ceil() as u32;
+        return RestartCounter {
+            min: min,
+            max: max,
+            max_count: max_count,
+            count: 0,
+        };
+    }
+
+    fn reset(&mut self) {
+        self.count = 0;
+    }
+
+    fn failure_count(&self) -> usize {
+        return self.count as usize + 1;
+    }
+
+    fn next_delay(&mut self) -> Duration {
+        let duration = (self.min * 2u32.pow(self.count.min(self.max_count))).min(self.max);
+        let duration =
+            duration +
+                Duration::from_secs_f64(
+                    (rand::rng().random_range(0 .. u32::MAX) as f64 / (u32::MAX as f64)) * duration.as_secs_f64(),
+                );
+        self.count += 1;
+        return duration;
+    }
 }
 
 fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePlan) {
+    if state.debug {
+        sanity_check(&state.log, state_dynamic, &plan);
+    }
     for task_id in plan.log_started {
         log_started(&state, &task_id);
     }
@@ -293,10 +407,7 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                     let state = state.clone();
                     let log = log.clone();
                     async move {
-                        let restart_delay = Duration::from(spec.restart_delay.unwrap_or(SimpleDuration {
-                            count: 1,
-                            unit: SimpleDurationUnit::Minute,
-                        }).into());
+                        let mut restart_counter = RestartCounter::new(spec.restart_delay, spec.restart_delay_max);
                         loop {
                             event_starting(&state, &task_id);
 
@@ -332,6 +443,17 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                                             },
                                             Err(e) => match e {
                                                 oneshot::error::TryRecvError::Empty => {
+                                                    {
+                                                        let state_dynamic = state.dynamic.lock().unwrap();
+                                                        let specific =
+                                                            exenum!(
+                                                                &get_task(&state_dynamic, &task_id).specific,
+                                                                TaskStateSpecific:: Long(s) => s
+                                                            ).unwrap();
+                                                        specific
+                                                            .failed_start_count
+                                                            .set(restart_counter.failure_count());
+                                                    }
                                                     return EndAction::Retry;
                                                 },
                                                 oneshot::error::TryRecvError::Closed => {
@@ -392,8 +514,9 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                                         task.actual.set((Actual::Started, Utc::now()));
                                         let specific =
                                             exenum!(&task.specific, TaskStateSpecific:: Long(s) => s).unwrap();
+                                        restart_counter.reset();
                                         specific.failed_start_count.set(0);
-                                        event_started(&state, &mut state_dynamic, &task_id);
+                                        event_started(&state, &mut state_dynamic, &task_id, EventStartedAction::None);
                                     }
 
                                     // Do nothing forever
@@ -424,6 +547,7 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                                             let specific =
                                                 exenum!(&task.specific, TaskStateSpecific:: Long(s) => s).unwrap();
                                             specific.pid.set(None);
+                                            specific.failed_start_count.set(restart_counter.failure_count());
                                         }
                                         return EndAction::Retry;
                                     },
@@ -451,16 +575,15 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                                 },
                             }
                             select!{
-                                _ = sleep(restart_delay) => {
-                                    // nop
-                                    },
+                                _ = sleep(restart_counter.next_delay()) => {
+                                },
                                 _ =& mut stop_rx => {
                                     break;
                                 }
                             }
                         }
 
-                        // Mark as stopped
+                        // Handle stopped
                         {
                             let mut state_dynamic = state.dynamic.lock().unwrap();
                             let task = get_task(&state_dynamic, &task_id);
@@ -482,10 +605,7 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                     let state = state.clone();
                     let log = log.clone();
                     async move {
-                        let restart_delay = Duration::from(spec.restart_delay.unwrap_or(SimpleDuration {
-                            count: 1,
-                            unit: SimpleDurationUnit::Minute,
-                        }).into());
+                        let mut restart_counter = RestartCounter::new(spec.restart_delay, spec.restart_delay_max);
                         let mut success_codes = HashSet::new();
                         success_codes.extend(spec.success_codes);
                         if success_codes.is_empty() {
@@ -495,7 +615,7 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                             event_starting(&state, &task_id);
 
                             struct EndActionBreak {
-                                stopped: bool,
+                                do_event_stopped: bool,
                             }
 
                             enum EndAction {
@@ -510,14 +630,16 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                                         log.log_err(loga::WARN, e.context("Failed to launch process"));
                                         match stop_rx.try_recv() {
                                             Ok(_) => {
-                                                return EndAction::Break(EndActionBreak { stopped: true });
+                                                return EndAction::Break(EndActionBreak { do_event_stopped: true });
                                             },
                                             Err(e) => match e {
                                                 oneshot::error::TryRecvError::Empty => {
                                                     return EndAction::Retry;
                                                 },
                                                 oneshot::error::TryRecvError::Closed => {
-                                                    return EndAction::Break(EndActionBreak { stopped: true });
+                                                    return EndAction::Break(
+                                                        EndActionBreak { do_event_stopped: true },
+                                                    );
                                                 },
                                             },
                                         }
@@ -551,25 +673,25 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                                                         specific.failed_start_count.set(0);
                                                         let started_action =
                                                             get_short_task_started_action(&specific.spec);
-                                                        event_started(&state, &mut state_dynamic, &task_id);
+                                                        let event_extra_action;
                                                         match started_action {
                                                             interface::task::ShortTaskStartedAction::None => {
-                                                                return EndAction::Break(
-                                                                    EndActionBreak { stopped: false },
-                                                                );
+                                                                event_extra_action = EventStartedAction::None;
                                                             },
                                                             interface::task::ShortTaskStartedAction::TurnOff |
                                                             interface::task::ShortTaskStartedAction::Delete => {
-                                                                set_task_user_off(
-                                                                    &state,
-                                                                    &mut state_dynamic,
-                                                                    &task_id,
-                                                                );
-                                                                return EndAction::Break(
-                                                                    EndActionBreak { stopped: true },
-                                                                );
+                                                                event_extra_action = EventStartedAction::SetOff;
                                                             },
                                                         }
+                                                        event_started(
+                                                            &state,
+                                                            &mut state_dynamic,
+                                                            &task_id,
+                                                            event_extra_action,
+                                                        );
+                                                        return EndAction::Break(
+                                                            EndActionBreak { do_event_stopped: false },
+                                                        );
                                                     }
                                                 } else {
                                                     log.log(
@@ -583,7 +705,7 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                                                         let specific = exenum!(&get_task(&state_dynamic, &task_id).specific, TaskStateSpecific:: Short(s) => s).unwrap();
                                                         specific
                                                             .failed_start_count
-                                                            .set(specific.failed_start_count.get() + 1);
+                                                            .set(restart_counter.failure_count());
                                                     }
                                                     return EndAction::Retry;
                                                 }
@@ -598,9 +720,7 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                                                 //
                                                 // Stopping, move back to starting
                                                 let specific = exenum!(&get_task(&state_dynamic, &task_id).specific, TaskStateSpecific:: Short(s) => s).unwrap();
-                                                specific
-                                                    .failed_start_count
-                                                    .set(specific.failed_start_count.get() + 1);
+                                                specific.failed_start_count.set(restart_counter.failure_count());
                                                 return EndAction::Retry;
                                             },
                                         }
@@ -615,20 +735,20 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                                         gentle_stop_proc(&log, pid, child, spec.stop_timeout).await;
 
                                         // Stopped
-                                        return EndAction::Break(EndActionBreak { stopped: true });
+                                        return EndAction::Break(EndActionBreak { do_event_stopped: true });
                                     }
                                 };
                             }.await;
                             match end_action {
                                 EndAction::Break(b) => {
-                                    break b.stopped;
+                                    break b.do_event_stopped;
                                 },
                                 EndAction::Retry => {
                                     // nop
                                 },
                             }
                             select!{
-                                _ = sleep(restart_delay) => {
+                                _ = sleep(restart_counter.next_delay()) => {
                                 },
                                 _ =& mut stop_rx => {
                                     break true;
@@ -636,7 +756,7 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                             }
                         };
                         if stopped {
-                            handle_short_stopped(&state, &task_id);
+                            event_short_stopped(&state, &task_id);
                         }
                     }
                 });
@@ -657,9 +777,12 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                     _ = stop.send(());
                 }
                 if task.actual.get().0 == Actual::Started {
-                    handle_short_stopped2!(state, state_dynamic, task_id, task, specific);
+                    event_short_stopped2!(state, state_dynamic, task_id, task, specific);
                 }
             },
         }
+    }
+    for task_id in plan.delete {
+        delete_task(state_dynamic, &task_id);
     }
 }

@@ -199,6 +199,23 @@ pub struct RespScheduleEntry {
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct RequestDemonSpecDirs {}
 
+#[derive(Serialize, Deserialize, Clone, JsonSchema)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum EventType {
+    DirectOn(bool),
+    Actual(Actual),
+}
+
+#[derive(Serialize, Deserialize, Clone, JsonSchema)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct Event {
+    pub task: TaskId,
+    pub event_type: EventType,
+}
+#[derive(Serialize, Deserialize, Clone, JsonSchema)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct ReqTaskWatch;
+
 reqresp!(pub ipc {
     TaskList(RequestTaskList) => Vec < TaskId >,
     TaskAdd(RequestTaskAdd) =>(),
@@ -213,6 +230,7 @@ reqresp!(pub ipc {
     TaskUpstreamStatus >,
     TaskListDownstream(RequestTaskListDownstream) => HashMap < TaskId,
     TaskDownstreamStatus >,
+    TaskWatch(ReqTaskWatch) => Vec < Event >,
     DemonEnv(RequestDemonEnv) => HashMap < String,
     String >,
     DemonListSchedule(RequestDemonListSchedule) => Vec < RespScheduleEntry >,

@@ -152,6 +152,7 @@ let
             (name: value: lib.strings.hasSuffix suffix name)
             listenSystemd);
       script = pkgs.writeShellScript "puteron-${levelName}-script" (lib.concatStringsSep " " ([ ]
+        ++ (if config.puteron.debug then [ "RUST_BACKTRACE=1" ] else [ ])
         ++ [ "exec ${pkg}/bin/puteron" "demon" "${demonConfig}" ]
         ++ (if config.puteron.debug then [ "--debug" ] else [ ])
       ));

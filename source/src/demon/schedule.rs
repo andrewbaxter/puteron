@@ -16,7 +16,6 @@ use {
         Utc,
     },
     rand::{
-        thread_rng,
         Rng,
     },
     std::{
@@ -28,7 +27,14 @@ use {
 };
 
 pub(crate) type ScheduleRule = Arc<(TaskId, interface::task::schedule::Rule)>;
-pub(crate) type ScheduleDynamic = BTreeMap<Instant, Vec<ScheduleRule>>;
+
+#[derive(Clone)]
+pub(crate) enum ScheduleEvent {
+    Rule(ScheduleRule),
+    WatcherExpire(i32),
+}
+
+pub(crate) type ScheduleDynamic = BTreeMap<Instant, Vec<ScheduleEvent>>;
 
 pub fn calc_next_instant(
     now: DateTime<Utc>,
@@ -43,7 +49,7 @@ pub fn calc_next_instant(
             if initial && s.scattered {
                 return instant_now +
                     Duration::from_secs_f64(
-                        Duration::from(s.period.into()).as_secs_f64() * thread_rng().gen_range::<f64, _>(0. .. 1.),
+                        Duration::from(s.period.into()).as_secs_f64() * rand::rng().random_range::<f64, _>(0. .. 1.),
                     );
             } else {
                 return instant_now + s.period.into();
@@ -126,13 +132,13 @@ pub(crate) fn populate_schedule(state_dynamic: &mut StateDynamic) {
                     .schedule
                     .entry(calc_next_instant(Utc::now(), Instant::now(), rule, false))
                     .or_default()
-                    .push(ScheduleRule::new((id.clone(), rule.clone())));
+                    .push(ScheduleEvent::Rule(ScheduleRule::new((id.clone(), rule.clone()))));
             }
         }
     }
 }
 
-pub(crate) fn pop_schedule(state_dynamic: &mut StateDynamic) -> Option<(Instant, ScheduleRule)> {
+pub(crate) fn pop_schedule(state_dynamic: &mut StateDynamic) -> Option<(Instant, ScheduleEvent)> {
     let Some(mut next_entry) = state_dynamic.schedule.first_entry() else {
         return None;
     };

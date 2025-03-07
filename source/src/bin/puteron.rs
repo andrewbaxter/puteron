@@ -10,30 +10,31 @@ use {
         Log,
         ResultContext,
     },
-    puteron::interface::{
-        self,
-        base::TaskId,
-        ipc::{
-            Actual,
-            RequestDemonEnv,
-            RequestDemonSpecDirs,
-            RequestTaskAdd,
-            RequestTaskDelete,
-            RequestTaskGetSpec,
-            RequestTaskGetStatus,
-            RequestTaskList,
-            RequestTaskListDownstream,
-            RequestTaskListUpstream,
-            RequestTaskListUserOn,
-            RequestTaskOnOff,
-            RequestTaskWaitStarted,
-            RequestTaskWaitStopped,
-        },
-    },
     puteron::{
         demon::{
             self,
             DemonRunArgs,
+        },
+        interface::{
+            self,
+            base::TaskId,
+            ipc::{
+                Actual,
+                ReqTaskWatch,
+                RequestDemonEnv,
+                RequestDemonSpecDirs,
+                RequestTaskAdd,
+                RequestTaskDelete,
+                RequestTaskGetSpec,
+                RequestTaskGetStatus,
+                RequestTaskList,
+                RequestTaskListDownstream,
+                RequestTaskListUpstream,
+                RequestTaskListUserOn,
+                RequestTaskOnOff,
+                RequestTaskWaitStarted,
+                RequestTaskWaitStopped,
+            },
         },
         ipc_util::{
             client,
@@ -43,7 +44,10 @@ use {
     },
     serde::Serialize,
     std::collections::HashMap,
-    tokio::runtime,
+    tokio::{
+        io::AsyncWriteExt,
+        runtime,
+    },
 };
 
 #[derive(Aargvark)]
@@ -125,6 +129,9 @@ enum ArgCommand {
     ListUpstream(ListUpstreamArgs),
     /// List tasks downstream of a task, plus their control and current states.
     ListDownstream(ListDownstreamArgs),
+    /// Writes a line of JSON to stdout every time a task's control or actual state
+    /// changes.
+    Watch,
     /// Show the demon's effective environment variables
     Env,
     /// List the current schedule. This includes the next time of all scheduled tasks.
@@ -144,7 +151,8 @@ struct Args {
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
     let args = aargvark::vark::<Args>();
-    let log = Log::new_root(match args.debug.is_some() {
+    let debug = args.debug.is_some();
+    let log = Log::new_root(match debug {
         true => loga::DEBUG,
         false => loga::INFO,
     });
@@ -244,6 +252,16 @@ async fn main() {
                     include_weak: args.include_weak.is_some() || args.all.is_some(),
                 }).await?).unwrap());
             },
+            ArgCommand::Watch => {
+                let mut stdout = tokio::io::stdout();
+                loop {
+                    let events = client_req(ReqTaskWatch).await?;
+                    for event in events {
+                        stdout.write_all(format!("{}\n", serde_json::to_string(&event).unwrap()).as_bytes()).await?;
+                    }
+                    stdout.flush().await?;
+                }
+            },
             ArgCommand::Env => {
                 let rt =
                     runtime::Builder::new_current_thread()
@@ -271,7 +289,7 @@ async fn main() {
                 });
             },
             ArgCommand::Demon(args) => {
-                demon::main(&log, args).await?;
+                demon::main(debug, &log, args).await?;
             },
         }
         return Ok(());

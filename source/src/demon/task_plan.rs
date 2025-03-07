@@ -1,29 +1,31 @@
 use {
-    super::{
-        state::{
-            StateDynamic,
-            TaskState_,
+    crate::{
+        demon::{
+            interface::{
+                base::TaskId,
+                ipc::Actual,
+                task::DependencyType,
+            },
+            state::{
+                StateDynamic,
+                TaskStateSpecific,
+                TaskState_,
+            },
+            task_util::{
+                are_all_downstream_tasks_stopped,
+                are_all_weak_upstream_effective_on,
+                get_task,
+                is_actual_all_upstream_tasks_started,
+                is_control_effective_on,
+                walk_task_upstream,
+            },
         },
-        task_util::are_all_downstream_tasks_stopped,
-    },
-    crate::demon::{
-        state::TaskStateSpecific,
-        task_util::{
-            are_all_upstream_tasks_started,
-            are_all_weak_upstream_effective_on,
-            get_task,
-            is_task_effective_on,
-            is_task_on,
-            walk_task_upstream,
-        },
-        interface::{
-            base::TaskId,
-            ipc::Actual,
-            task::DependencyType,
-        },
+        interface::task::ShortTaskStartedAction,
     },
     chrono::Utc,
-    std::collections::HashSet,
+    std::collections::{
+        HashSet,
+    },
 };
 
 #[derive(Default, Debug)]
@@ -34,12 +36,13 @@ pub(crate) struct ExecutePlan {
     pub(crate) log_stopped: HashSet<TaskId>,
     pub(crate) run: HashSet<TaskId>,
     pub(crate) stop: HashSet<TaskId>,
+    pub(crate) delete: HashSet<TaskId>,
 }
 
 /// After state change
 pub(crate) fn plan_event_started(state_dynamic: &StateDynamic, plan: &mut ExecutePlan, task_id: &TaskId) {
     plan.log_started.insert(task_id.clone());
-    propagate_start_downstream(state_dynamic, plan, task_id);
+    sync_actual_should_start_downstream_exclusive(state_dynamic, plan, task_id);
 }
 
 /// After state change
@@ -51,24 +54,37 @@ pub(crate) fn plan_event_stopping(state_dynamic: &StateDynamic, plan: &mut Execu
     frontier.extend(get_task(state_dynamic, task_id).downstream.borrow().keys().cloned());
     while let Some(upstream_id) = frontier.pop() {
         let upstream_task = get_task(state_dynamic, &upstream_id);
-        plan_stop_one_task(state_dynamic, plan, &upstream_task);
+        plan_actual_stop_one(state_dynamic, plan, &upstream_task);
         frontier.extend(upstream_task.downstream.borrow().keys().cloned());
     }
 }
 
 /// After state change
 pub(crate) fn plan_event_stopped(state_dynamic: &StateDynamic, plan: &mut ExecutePlan, task_id: &TaskId) {
-    propagate_stop(state_dynamic, plan, task_id);
+    eprintln!("plan event stopped {}--", task_id);
+    sync_actual_should_stop_related(state_dynamic, plan, task_id);
+    eprintln!("plan event stopped {}--done", task_id);
 }
 
 /// Return true if started - downstream can be started now.
-pub(crate) fn plan_start_one_task(state_dynamic: &StateDynamic, plan: &mut ExecutePlan, task: &TaskState_) -> bool {
-    if !are_all_upstream_tasks_started(&state_dynamic, task) {
+pub(crate) fn plan_actual_start_one(state_dynamic: &StateDynamic, plan: &mut ExecutePlan, task: &TaskState_) -> bool {
+    if !is_control_effective_on(task) {
+        eprintln!("   --> not effective on");
+        return false;
+    }
+    if !is_actual_all_upstream_tasks_started(state_dynamic, task) {
+        eprintln!("   --> not all upstream started");
         return false;
     }
     match task.actual.get().0 {
-        Actual::Started => return true,
-        Actual::Starting | Actual::Stopping => return false,
+        Actual::Started => {
+            eprintln!("   --> already started");
+            return true;
+        },
+        Actual::Starting | Actual::Stopping => {
+            eprintln!("   --> starting or stopping");
+            return false;
+        },
         Actual::Stopped => { },
     }
     match &task.specific {
@@ -95,8 +111,11 @@ pub(crate) fn plan_start_one_task(state_dynamic: &StateDynamic, plan: &mut Execu
 }
 
 /// Return true if task is finished stopping (can continue with upstream).
-pub(crate) fn plan_stop_one_task(state_dynamic: &StateDynamic, plan: &mut ExecutePlan, task: &TaskState_) {
+pub(crate) fn plan_actual_stop_one(state_dynamic: &StateDynamic, plan: &mut ExecutePlan, task: &TaskState_) {
     if !are_all_downstream_tasks_stopped(state_dynamic, &task) {
+        return;
+    }
+    if is_control_effective_on(task) && is_actual_all_upstream_tasks_started(state_dynamic, task) {
         return;
     }
     if task.actual.get().0 == Actual::Stopped {
@@ -110,10 +129,14 @@ pub(crate) fn plan_stop_one_task(state_dynamic: &StateDynamic, plan: &mut Execut
         TaskStateSpecific::Long(_) => {
             plan.stop.insert(task.id.clone());
         },
-        TaskStateSpecific::Short(_) => {
+        TaskStateSpecific::Short(specific) => {
             if task.actual.get().0 == Actual::Started {
                 plan.log_stopping.insert(task.id.clone());
                 task.actual.set((Actual::Stopped, Utc::now()));
+                if let Some(ShortTaskStartedAction::Delete) = specific.spec.started_action {
+                    eprintln!("plan stop one - delete {}", task.id);
+                    plan.delete.insert(task.id.clone());
+                }
             } else {
                 plan.stop.insert(task.id.clone());
             }
@@ -121,84 +144,49 @@ pub(crate) fn plan_stop_one_task(state_dynamic: &StateDynamic, plan: &mut Execut
     }
 }
 
-pub(crate) fn adjust_downstream_awueo(
-    state_dynamic: &StateDynamic,
-    root_task: &TaskState_,
-    want_on: bool,
-    changed_cb: &mut impl FnMut(&StateDynamic, &TaskState_),
-) {
-    fn push_weak_downstream(frontier: &mut Vec<TaskId>, task: &TaskState_) {
-        for (downstream_id, downstream_type) in task.downstream.borrow().iter() {
-            if *downstream_type != DependencyType::Weak {
-                continue;
-            }
-            frontier.push(downstream_id.clone());
-        }
-    }
-
-    let mut downstream_frontier = vec![];
-    push_weak_downstream(&mut downstream_frontier, root_task);
-    while let Some(downstream_id) = downstream_frontier.pop() {
-        let downstream_task = get_task(state_dynamic, &downstream_id);
-        if want_on {
-            if downstream_task.awueo.get() {
-                // No change
-                continue;
-            }
-            if !are_all_weak_upstream_effective_on(state_dynamic, downstream_task) {
-                // No change
-                continue;
-            }
-
-            // Update all_weak_upstream_effective_on
-            downstream_task.awueo.set(true);
-        } else {
-            if !downstream_task.awueo.get() {
-                // No change
-                continue;
-            }
-            downstream_task.awueo.set(false);
-        }
-
-        // State changed, continue downstream
-        push_weak_downstream(&mut downstream_frontier, downstream_task);
-
-        // State changed, call cb
-        changed_cb(state_dynamic, downstream_task);
-    }
-}
-
-// Adjusts `transitive_on` and `all_weak_upstream_effective_on` of the supertree
-// of the specified task.
-pub(crate) fn adjust_related_on(
+pub(crate) fn plan_set_direct(
     state_dynamic: &StateDynamic,
     root_task_id: &TaskId,
     want_on: bool,
     // Called for each task whose state was modified, depth first.
-    mut changed_cb: impl FnMut(&StateDynamic, &TaskState_),
+    mut changed_cb: impl FnMut(&TaskState_),
 ) {
-    let mut seen = HashSet::new();
+    eprintln!("set direct on={} -- {}", want_on, root_task_id);
+
+    // # Inclusive upward strong - adjust transitive_on
+    let mut seen_upstream = HashSet::new();
     let mut upstream_frontier = vec![(true, root_task_id.clone())];
     while let Some((first_pass, upstream_id)) = upstream_frontier.pop() {
-        if seen.contains(&upstream_id) {
+        eprintln!(" (weakly related) upstream {}; first {})", upstream_id, first_pass);
+        if seen_upstream.contains(&upstream_id) {
             continue;
         }
         if first_pass {
             let upstream_task = get_task(state_dynamic, &upstream_id);
-            let was_on = is_task_on(&upstream_task);
-            if &upstream_id != root_task_id {
-                // Adjust transitive_on
+
+            // Update state, track if changed
+            let was_on = upstream_task.direct_on.get().0 || upstream_task.transitive_on.get().0;
+            if &upstream_id == root_task_id {
+                if upstream_task.direct_on.get().0 != want_on {
+                    upstream_task.direct_on.set((want_on, Utc::now()));
+                }
+            } else {
                 if upstream_task.transitive_on.get().0 != want_on {
                     upstream_task.transitive_on.set((want_on, Utc::now()));
                 }
-                if was_on == want_on {
-                    // No state change, no need to visit sub/supertree
-                    continue;
-                }
             }
-            upstream_frontier.push((false, upstream_id));
 
-            // Continue upstream
+            // If no change, abort ascent
+            if was_on == want_on {
+                eprintln!(" --> already on = {}", want_on);
+
+                // No change, abort upwards propagation
+                seen_upstream.insert(upstream_id.clone());
+                continue;
+            }
+
+            // Ascend
+            upstream_frontier.push((false, upstream_id));
             walk_task_upstream(&upstream_task, |upstream| {
                 for (upstream_id, upstream_type) in upstream {
                     if *upstream_type != DependencyType::Strong {
@@ -208,63 +196,82 @@ pub(crate) fn adjust_related_on(
                 }
             });
         } else {
-            seen.insert(upstream_id.clone());
+            seen_upstream.insert(upstream_id.clone());
             let upstream_task = get_task(state_dynamic, &upstream_id);
 
-            // transitive_on changed, call cb
-            changed_cb(state_dynamic, upstream_task);
+            // On changed, do cb
+            changed_cb(upstream_task);
 
-            // Adjust effective_on of subtree
-            adjust_downstream_awueo(state_dynamic, upstream_task, want_on, &mut changed_cb);
+            // # Exclusive downward weak - adjust awueo/effective_on through weak downstreams
+            if is_control_effective_on(upstream_task) == want_on {
+                fn push_weak_downstream(frontier: &mut Vec<TaskId>, task: &TaskState_) {
+                    for (downstream_id, downstream_type) in task.downstream.borrow().iter() {
+                        if *downstream_type != DependencyType::Weak {
+                            continue;
+                        }
+                        frontier.push(downstream_id.clone());
+                    }
+                }
+
+                let mut downstream_frontier = vec![];
+                push_weak_downstream(&mut downstream_frontier, upstream_task);
+                while let Some(downstream_id) = downstream_frontier.pop() {
+                    eprintln!(" (sync awueo down) {}", downstream_id);
+                    let downstream_task = get_task(state_dynamic, &downstream_id);
+                    if downstream_task.awueo.get() == want_on {
+                        // No change
+                        continue;
+                    }
+                    if want_on && !are_all_weak_upstream_effective_on(state_dynamic, downstream_task) {
+                        // Can't change, no change
+                        continue;
+                    }
+
+                    // Update state
+                    downstream_task.awueo.set(want_on);
+                    eprintln!("   (( awueo={} for {}", want_on, downstream_id);
+
+                    // Awueo changed, do cb
+                    changed_cb(downstream_task);
+
+                    // Descend
+                    push_weak_downstream(&mut downstream_frontier, downstream_task);
+                }
+            }
         }
     }
 }
 
-pub(crate) fn plan_set_task_direct_on(state_dynamic: &StateDynamic, plan: &mut ExecutePlan, root_task_id: &TaskId) {
-    // Update on flags and check if the effective `on` state has changed
-    let task = get_task(state_dynamic, root_task_id);
-    let was_effective_on = is_task_effective_on(&task);
-    task.direct_on.set((true, Utc::now()));
-    if was_effective_on && is_task_effective_on(&task) {
-        return;
+pub(crate) fn sync_actual_should_start_downstream(
+    state_dynamic: &StateDynamic,
+    plan: &mut ExecutePlan,
+    root_task_id: &TaskId,
+    task: &TaskState_,
+) {
+    eprintln!(" (sync actual down) down {})", root_task_id);
+    if plan_actual_start_one(state_dynamic, plan, task) {
+        sync_actual_should_start_downstream_exclusive(state_dynamic, plan, root_task_id);
     }
+}
 
-    // Update related on status, start tasks
-    adjust_related_on(state_dynamic, root_task_id, true, |state_dynamic, task| {
-        // Only weakly-related, state changed elements
-        if are_all_upstream_tasks_started(state_dynamic, task) {
-            plan_start_one_task(state_dynamic, plan, task);
-        }
+pub(crate) fn plan_set_direct_on(state_dynamic: &StateDynamic, plan: &mut ExecutePlan, root_task_id: &TaskId) {
+    plan_set_direct(state_dynamic, root_task_id, true, |task| {
+        eprintln!(" -- start weakly related {}", task.id);
+        plan_actual_start_one(state_dynamic, plan, task);
     });
-
-    // Start this and the whole subree around this task (strong + weak)
-    if !are_all_upstream_tasks_started(state_dynamic, task) {
-        return;
-    }
-    if !plan_start_one_task(state_dynamic, plan, task) {
-        return;
-    }
-    propagate_start_downstream(state_dynamic, plan, root_task_id);
+    sync_actual_should_start_downstream(state_dynamic, plan, root_task_id, get_task(state_dynamic, root_task_id));
 }
 
-pub(crate) fn plan_set_task_direct_off(state_dynamic: &StateDynamic, plan: &mut ExecutePlan, task_id: &TaskId) {
-    let task = get_task(state_dynamic, &task_id);
-    if task.direct_on.get().0 {
-        task.direct_on.set((false, Utc::now()));
-    }
-    if task.transitive_on.get().0 {
-        return;
-    }
-
-    // Update related status
-    adjust_related_on(state_dynamic, task_id, false, |_state_dynamic, _task| { });
-
-    // Trigger state changes
-    propagate_stop(state_dynamic, plan, task_id);
+pub(crate) fn plan_set_direct_off(state_dynamic: &StateDynamic, plan: &mut ExecutePlan, task_id: &TaskId) {
+    plan_set_direct(state_dynamic, task_id, false, |_task| { });
+    sync_actual_should_stop_related(state_dynamic, plan, task_id);
 }
 
-// When a task starts, start the next dependent downstream tasks
-fn propagate_start_downstream(state_dynamic: &StateDynamic, plan: &mut ExecutePlan, from_task_id: &TaskId) {
+fn sync_actual_should_start_downstream_exclusive(
+    state_dynamic: &StateDynamic,
+    plan: &mut ExecutePlan,
+    from_task_id: &TaskId,
+) {
     let mut frontier = vec![];
 
     fn push_downstream(frontier: &mut Vec<TaskId>, task: &TaskState_) {
@@ -273,58 +280,50 @@ fn propagate_start_downstream(state_dynamic: &StateDynamic, plan: &mut ExecutePl
 
     push_downstream(&mut frontier, get_task(state_dynamic, from_task_id));
     while let Some(downstream_id) = frontier.pop() {
+        eprintln!(" (sync actual down2) down {})", downstream_id);
         let downstream = get_task(state_dynamic, &downstream_id);
-        if !is_task_on(&downstream) {
+        if !is_control_effective_on(&downstream) {
+            eprintln!("  --> not on");
             continue;
         }
-        if !plan_start_one_task(state_dynamic, plan, &downstream) {
+        eprintln!("  --> starting");
+        if !plan_actual_start_one(state_dynamic, plan, &downstream) {
             continue;
         }
         push_downstream(&mut frontier, downstream);
     }
 }
 
-// Stop (a task and) continue to all off upstreams, and all weak downstreams of
-// those.
-fn propagate_stop(state_dynamic: &StateDynamic, plan: &mut ExecutePlan, task_id: &TaskId) {
+pub(crate) fn sync_actual_should_stop_related(state_dynamic: &StateDynamic, plan: &mut ExecutePlan, task_id: &TaskId) {
     let mut seen = HashSet::new();
     let mut upstream_frontier = vec![task_id.clone()];
     while let Some(upstream_id) = upstream_frontier.pop() {
+        eprintln!("propagate stop, at upstream {}", upstream_id);
         if seen.contains(&upstream_id) {
             continue;
         }
         let upstream_task = get_task(state_dynamic, &upstream_id);
-        if is_task_effective_on(upstream_task) {
+        if is_control_effective_on(upstream_task) {
             continue;
         }
 
-        // Stop all weak downstream and task itself
+        // Stop leaves of weak downstream and self
         {
-            let mut downstream_frontier = vec![(true, upstream_id.clone(), DependencyType::Strong)];
-            while let Some((first_pass, downstream_id, downstream_type)) = downstream_frontier.pop() {
+            let mut downstream_frontier = vec![(true, upstream_id.clone())];
+            while let Some((first_pass, downstream_id)) = downstream_frontier.pop() {
                 if seen.contains(&downstream_id) {
                     continue;
                 }
                 if first_pass {
                     let downstream_task = get_task(state_dynamic, &downstream_id);
-                    match downstream_type {
-                        DependencyType::Strong => {
-                            if is_task_effective_on(&downstream_task) {
-                                continue;
-                            }
-                        },
-                        DependencyType::Weak => { },
-                    }
-                    downstream_frontier.push((false, downstream_id.clone(), downstream_type));
-
-                    // Descend
-                    for (k, v) in downstream_task.downstream.borrow().iter() {
-                        downstream_frontier.push((true, k.clone(), *v));
+                    downstream_frontier.push((false, downstream_id.clone()));
+                    for (k, _) in downstream_task.downstream.borrow().iter() {
+                        downstream_frontier.push((true, k.clone()));
                     }
                 } else {
-                    // Stop if possible
+                    eprintln!(" --> downstream {}", downstream_id);
                     let downstream_task = get_task(state_dynamic, &downstream_id);
-                    plan_stop_one_task(state_dynamic, plan, &downstream_task);
+                    plan_actual_stop_one(state_dynamic, plan, &downstream_task);
                     seen.insert(downstream_id.clone());
                 }
             }
@@ -336,5 +335,157 @@ fn propagate_stop(state_dynamic: &StateDynamic, plan: &mut ExecutePlan, task_id:
                 upstream_frontier.push(up_id.clone());
             }
         });
+    }
+}
+
+/// Check:
+///
+/// * awueo
+///
+/// * transitive_on
+///
+/// * actual state
+pub(crate) fn sanity_check(log: &loga::Log, state_dynamic: &StateDynamic, plan: &ExecutePlan) {
+    let mut errors = vec![];
+
+    // Check transitive_on
+    {
+        let mut done = HashSet::new();
+        loop {
+            let initial_done_count = done.len();
+            for (task_id, task) in &state_dynamic.tasks {
+                if done.contains(task_id) {
+                    continue;
+                }
+                let task = state_dynamic.task_alloc.get(*task).unwrap();
+                let mut known = true;
+                let mut want_transitive_on = false;
+                for (downstream_id, downstream_type) in task.downstream.borrow().iter() {
+                    if *downstream_type != DependencyType::Strong {
+                        continue;
+                    };
+                    if !done.contains(downstream_id) {
+                        known = false;
+                        break;
+                    }
+                    let downstream = get_task(state_dynamic, downstream_id);
+                    if downstream.direct_on.get().0 || downstream.transitive_on.get().0 {
+                        want_transitive_on = true;
+                    }
+                }
+                if known {
+                    if task.transitive_on.get().0 != want_transitive_on {
+                        errors.push(
+                            format!(
+                                "Task [{}] transitive_on mismatch: want {} have {}",
+                                task_id,
+                                want_transitive_on,
+                                task.transitive_on.get().0
+                            ),
+                        );
+                    }
+                    done.insert(task_id);
+                }
+            }
+            if done.len() == initial_done_count {
+                break;
+            }
+        }
+    }
+
+    // Check awueo
+    {
+        let mut done = HashSet::new();
+        loop {
+            let initial_done_count = done.len();
+            for (task_id, task) in &state_dynamic.tasks {
+                if done.contains(task_id) {
+                    continue;
+                }
+                let task = state_dynamic.task_alloc.get(*task).unwrap();
+                let mut known = true;
+                let mut want_awueo = true;
+                walk_task_upstream(task, |upstream| {
+                    for (upstream_id, upstream_type) in upstream {
+                        if *upstream_type != DependencyType::Weak {
+                            continue;
+                        };
+                        if !done.contains(upstream_id) {
+                            known = false;
+                            break;
+                        }
+                        let upstream = get_task(state_dynamic, upstream_id);
+                        if !is_control_effective_on(upstream) {
+                            want_awueo = false;
+                        }
+                    }
+                });
+                if known {
+                    if task.awueo.get() != want_awueo {
+                        errors.push(
+                            format!("Task [{}] awueo mismatch: want {} have {}", task_id, want_awueo, task.awueo.get()),
+                        );
+                    }
+                    done.insert(task_id);
+                }
+            }
+            if done.len() == initial_done_count {
+                break;
+            }
+        }
+    }
+
+    // Check actual/plan
+    for (task_id, task) in &state_dynamic.tasks {
+        let task = state_dynamic.task_alloc.get(*task).unwrap();
+        let mut start = false;
+        let mut stop = false;
+        match task.actual.get().0 {
+            Actual::Stopped => {
+                if plan.run.contains(task_id) {
+                    start = true;
+                } else {
+                    stop = true;
+                }
+            },
+            Actual::Starting => {
+                start = true;
+            },
+            Actual::Started => {
+                if plan.stop.contains(task_id) {
+                    stop = true;
+                } else {
+                    start = true;
+                }
+            },
+            Actual::Stopping => {
+                start = true;
+                stop = true;
+            },
+        }
+        if is_control_effective_on(task) && is_actual_all_upstream_tasks_started(state_dynamic, task) && !start {
+            errors.push(format!("Task [{}] on + all upstream started, but not starting", task_id));
+        }
+        let mut no_downstream_not_stopped = true;
+        for (downstream_id, _downstream_type) in task.downstream.borrow().iter() {
+            let downstream = get_task(state_dynamic, downstream_id);
+            if downstream.actual.get().0 != Actual::Stopped {
+                no_downstream_not_stopped = false;
+                break;
+            }
+        }
+        if (!is_actual_all_upstream_tasks_started(state_dynamic, task) ||
+            (!is_control_effective_on(task) && no_downstream_not_stopped)) &&
+            !stop {
+            errors.push(
+                format!("Task [{}] upstream not running or off and no downstream running, but not stopping", task_id),
+            );
+        }
+    }
+    if !errors.is_empty() {
+        log.log_err(
+            loga::WARN,
+            loga::agg_err("State constraint check failed", errors.into_iter().map(loga::err).collect::<Vec<_>>()),
+        );
     }
 }

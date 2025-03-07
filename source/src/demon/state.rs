@@ -1,19 +1,22 @@
 use {
     super::schedule::{
         ScheduleDynamic,
-        ScheduleRule,
+        ScheduleEvent,
+    },
+    crate::interface::{
+        self,
+        base::TaskId,
+        ipc::{
+            Actual,
+            Event,
+        },
+        task::DependencyType,
     },
     chrono::{
         DateTime,
         Utc,
     },
     loga::Log,
-    crate::interface::{
-        self,
-        base::TaskId,
-        ipc::Actual,
-        task::DependencyType,
-    },
     slotmap::{
         new_key_type,
         SlotMap,
@@ -32,12 +35,16 @@ use {
     },
     tokio::{
         sync::{
+            broadcast,
             oneshot,
             Notify,
         },
         time::Instant,
     },
-    tokio_util::task::TaskTracker,
+    tokio_util::{
+        sync::CancellationToken,
+        task::TaskTracker,
+    },
 };
 
 pub(crate) struct TaskStateEmpty {
@@ -86,12 +93,17 @@ pub(crate) struct StateDynamic {
     // Downstream tasks are guaranteed to exist. Upstream tasks may or may not exist.
     pub(crate) tasks: HashMap<TaskId, TaskState>,
     // For cli command only, stores the current rule being waited on
-    pub(crate) schedule_top: Option<(Instant, ScheduleRule)>,
+    pub(crate) schedule_top: Option<(Instant, ScheduleEvent)>,
     pub(crate) schedule: ScheduleDynamic,
     pub(crate) notify_reschedule: Arc<Notify>,
+    pub(crate) watchers_send: Option<broadcast::Sender<Event>>,
+    // pid -> queue handle
+    pub(crate) watchers: HashMap<i32, (Instant, broadcast::Receiver<Event>)>,
 }
 
 pub(crate) struct State {
+    pub(crate) debug: bool,
+    pub(crate) shutdown: CancellationToken,
     pub(crate) log: Log,
     pub(crate) task_dirs: Vec<PathBuf>,
     pub(crate) env: HashMap<String, String>,

@@ -1,4 +1,5 @@
 use {
+    super::task_util::actual_set,
     crate::{
         demon::{
             interface::{
@@ -13,19 +14,20 @@ use {
             },
             task_util::{
                 are_all_downstream_tasks_stopped,
+                are_all_strong_downstream_direct_or_transitive_off,
                 are_all_weak_upstream_effective_on,
+                awueo_set,
+                direct_on_set,
                 get_task,
                 is_actual_all_upstream_tasks_started,
                 is_control_effective_on,
+                transitive_on_set,
                 walk_task_upstream,
             },
         },
         interface::task::ShortTaskStartedAction,
     },
-    chrono::Utc,
-    std::collections::{
-        HashSet,
-    },
+    std::collections::HashSet,
 };
 
 #[derive(Default, Debug)]
@@ -89,7 +91,7 @@ pub(crate) fn plan_actual_start_one(state_dynamic: &StateDynamic, plan: &mut Exe
     }
     match &task.specific {
         TaskStateSpecific::Empty(_) => {
-            task.actual.set((Actual::Started, Utc::now()));
+            actual_set(state_dynamic, task, Actual::Started);
             plan.log_started.insert(task.id.clone());
             return true;
         },
@@ -123,7 +125,7 @@ pub(crate) fn plan_actual_stop_one(state_dynamic: &StateDynamic, plan: &mut Exec
     }
     match &task.specific {
         TaskStateSpecific::Empty(_) => {
-            task.actual.set((Actual::Stopped, Utc::now()));
+            actual_set(state_dynamic, task, Actual::Stopped);
             plan.log_stopped.insert(task.id.clone());
         },
         TaskStateSpecific::Long(_) => {
@@ -132,7 +134,7 @@ pub(crate) fn plan_actual_stop_one(state_dynamic: &StateDynamic, plan: &mut Exec
         TaskStateSpecific::Short(specific) => {
             if task.actual.get().0 == Actual::Started {
                 plan.log_stopping.insert(task.id.clone());
-                task.actual.set((Actual::Stopped, Utc::now()));
+                actual_set(state_dynamic, task, Actual::Stopped);
                 if let Some(ShortTaskStartedAction::Delete) = specific.spec.started_action {
                     eprintln!("plan stop one - delete {}", task.id);
                     plan.delete.insert(task.id.clone());
@@ -168,11 +170,15 @@ pub(crate) fn plan_set_direct(
             let was_on = upstream_task.direct_on.get().0 || upstream_task.transitive_on.get().0;
             if &upstream_id == root_task_id {
                 if upstream_task.direct_on.get().0 != want_on {
-                    upstream_task.direct_on.set((want_on, Utc::now()));
+                    direct_on_set(state_dynamic, upstream_task, want_on);
                 }
             } else {
+                if !want_on && !are_all_strong_downstream_direct_or_transitive_off(state_dynamic, upstream_task) {
+                    // Can't change, no change
+                    continue;
+                }
                 if upstream_task.transitive_on.get().0 != want_on {
-                    upstream_task.transitive_on.set((want_on, Utc::now()));
+                    transitive_on_set(state_dynamic, upstream_task, want_on);
                 }
             }
 
@@ -228,7 +234,7 @@ pub(crate) fn plan_set_direct(
                     }
 
                     // Update state
-                    downstream_task.awueo.set(want_on);
+                    awueo_set(state_dynamic, downstream_task, want_on);
                     eprintln!("   (( awueo={} for {}", want_on, downstream_id);
 
                     // Awueo changed, do cb
@@ -450,6 +456,7 @@ pub(crate) fn sanity_check(log: &loga::Log, state_dynamic: &StateDynamic, plan: 
             },
             Actual::Starting => {
                 start = true;
+                stop = true;
             },
             Actual::Started => {
                 if plan.stop.contains(task_id) {

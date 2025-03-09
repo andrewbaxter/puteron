@@ -1,5 +1,8 @@
 use {
-    super::task_plan::sanity_check,
+    super::{
+        task_control::sanity_check,
+        task_util::actual_set,
+    },
     crate::{
         demon::{
             state::{
@@ -8,7 +11,7 @@ use {
                 TaskStateSpecific,
             },
             task_create_delete::delete_task,
-            task_plan::{
+            task_control::{
                 plan_event_started,
                 plan_event_stopped,
                 plan_event_stopping,
@@ -35,7 +38,6 @@ use {
             SimpleDurationUnit,
         },
     },
-    chrono::Utc,
     flowcontrol::{
         exenum,
         shed,
@@ -320,7 +322,7 @@ pub(crate) fn set_task_direct_off(state: &Arc<State>, state_dynamic: &mut StateD
 macro_rules! event_short_stopped2{
     // Work around borrow rules preventing code reuse
     ($state: expr, $state_dynamic: expr, $task_id: expr, $task: expr, $specific: expr) => {
-        $task.actual.set((Actual::Stopped, Utc::now()));
+        actual_set($state_dynamic, $task, Actual::Stopped);
         $specific.pid.set(None);
         event_stopped(&$state, $state_dynamic, &$task_id);
     };
@@ -328,9 +330,10 @@ macro_rules! event_short_stopped2{
 
 fn event_short_stopped(state: &Arc<State>, task_id: &TaskId) {
     let mut state_dynamic = state.dynamic.lock().unwrap();
-    let task = get_task(&state_dynamic, &task_id);
+    let state_dynamic = &mut state_dynamic;
+    let task = get_task(state_dynamic, &task_id);
     let specific = exenum!(&task.specific, TaskStateSpecific:: Short(s) => s).unwrap();
-    event_short_stopped2!(state, &mut state_dynamic, task_id, task, specific);
+    event_short_stopped2!(state, state_dynamic, task_id, task, specific);
 }
 
 struct RestartCounter {
@@ -394,7 +397,7 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
         let log = state.log.fork(ea!(task = task.id));
 
         // Mark as starting
-        task.actual.set((Actual::Starting, Utc::now()));
+        actual_set(state_dynamic, task, Actual::Starting);
         match &task.specific {
             TaskStateSpecific::Empty(_) => unreachable!(),
             TaskStateSpecific::Long(s) => {
@@ -511,7 +514,7 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                                     {
                                         let mut state_dynamic = state.dynamic.lock().unwrap();
                                         let task = get_task(&state_dynamic, &task_id);
-                                        task.actual.set((Actual::Started, Utc::now()));
+                                        actual_set(&state_dynamic, task, Actual::Started);
                                         let specific =
                                             exenum!(&task.specific, TaskStateSpecific:: Long(s) => s).unwrap();
                                         restart_counter.reset();
@@ -542,7 +545,7 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                                             // May or may not have started; mark as starting + do state updates
                                             let task = get_task(&state_dynamic, &task_id);
                                             if task.actual.get().0 != Actual::Starting {
-                                                task.actual.set((Actual::Starting, Utc::now()));
+                                                actual_set(&state_dynamic, task, Actual::Starting);
                                             }
                                             let specific =
                                                 exenum!(&task.specific, TaskStateSpecific:: Long(s) => s).unwrap();
@@ -556,7 +559,7 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                                         {
                                             let mut state_dynamic = state.dynamic.lock().unwrap();
                                             let task = get_task(&state_dynamic, &task_id);
-                                            task.actual.set((Actual::Stopping, Utc::now()));
+                                            actual_set(&state_dynamic, task, Actual::Stopping);
                                             event_stopping(&state, &mut state_dynamic, &task_id);
                                         }
 
@@ -587,7 +590,7 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                         {
                             let mut state_dynamic = state.dynamic.lock().unwrap();
                             let task = get_task(&state_dynamic, &task_id);
-                            task.actual.set((Actual::Stopped, Utc::now()));
+                            actual_set(&state_dynamic, task, Actual::Stopped);
                             let specific = exenum!(&task.specific, TaskStateSpecific:: Long(s) => s).unwrap();
                             specific.pid.set(None);
                             event_stopped(&state, &mut state_dynamic, &task_id);
@@ -668,13 +671,11 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                                                 if r.code().filter(|c| success_codes.contains(c)).is_some() {
                                                     // Mark as started + do state updates
                                                     {
-                                                        task.actual.set((Actual::Started, Utc::now()));
+                                                        actual_set(&state_dynamic, task, Actual::Started);
                                                         specific.stop.borrow_mut().take();
                                                         specific.failed_start_count.set(0);
-                                                        let started_action =
-                                                            get_short_task_started_action(&specific.spec);
                                                         let event_extra_action;
-                                                        match started_action {
+                                                        match get_short_task_started_action(&specific.spec) {
                                                             interface::task::ShortTaskStartedAction::None => {
                                                                 event_extra_action = EventStartedAction::None;
                                                             },
@@ -730,7 +731,7 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                                         {
                                             let state_dynamic = state.dynamic.lock().unwrap();
                                             let task = get_task(&state_dynamic, &task_id);
-                                            task.actual.set((Actual::Stopping, Utc::now()));
+                                            actual_set(&state_dynamic, task, Actual::Stopping);
                                         }
                                         gentle_stop_proc(&log, pid, child, spec.stop_timeout).await;
 

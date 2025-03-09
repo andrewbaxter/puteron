@@ -96,9 +96,9 @@ pub(crate) struct StateDynamic {
     pub(crate) schedule_top: Option<(Instant, ScheduleEvent)>,
     pub(crate) schedule: ScheduleDynamic,
     pub(crate) notify_reschedule: Arc<Notify>,
-    pub(crate) watchers_send: Option<broadcast::Sender<Event>>,
+    pub(crate) watchers_send: RefCell<Option<broadcast::Sender<Event>>>,
     // pid -> queue handle
-    pub(crate) watchers: HashMap<i32, (Instant, broadcast::Receiver<Event>)>,
+    pub(crate) idle_watchers: HashMap<i32, (Instant, broadcast::Receiver<Event>)>,
 }
 
 pub(crate) struct State {

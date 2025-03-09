@@ -74,7 +74,7 @@ pub struct RequestTaskGetStatus(pub TaskId);
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct TaskStatusSpecificEmpty {}
 
-#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Actual {
     Stopped,
@@ -203,6 +203,8 @@ pub struct RequestDemonSpecDirs {}
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum EventType {
     DirectOn(bool),
+    TransitiveOn(bool),
+    EffectiveOn(bool),
     Actual(Actual),
 }
 
@@ -210,7 +212,7 @@ pub enum EventType {
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct Event {
     pub task: TaskId,
-    pub event_type: EventType,
+    pub event: EventType,
 }
 #[derive(Serialize, Deserialize, Clone, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]

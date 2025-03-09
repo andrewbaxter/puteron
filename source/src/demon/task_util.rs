@@ -7,14 +7,91 @@ use {
     crate::interface::{
         self,
         base::TaskId,
-        ipc::Actual,
+        ipc::{
+            Actual,
+            Event,
+            EventType,
+        },
         task::{
             DependencyType,
             ShortTaskStartedAction,
             TaskSpecShort,
         },
     },
+    chrono::Utc,
 };
+
+pub(crate) fn actual_set(state_dynamic: &StateDynamic, task: &TaskState_, actual: Actual) {
+    eprintln!("      =actual {} {:?}", task.id, actual);
+    task.actual.set((actual, Utc::now()));
+    let sender = state_dynamic.watchers_send.borrow_mut().take();
+    if let Some(sender) = sender {
+        _ = sender.send(Event {
+            task: task.id.clone(),
+            event: EventType::Actual(actual),
+        }) as Result<_, _>;
+        *state_dynamic.watchers_send.borrow_mut() = Some(sender);
+    }
+}
+
+pub(crate) fn transitive_on_set(state_dynamic: &StateDynamic, task: &TaskState_, on: bool) {
+    let was_effective_on = is_control_effective_on(task);
+    eprintln!("      =transitive_on {} {:?}", task.id, on);
+    task.transitive_on.set((on, Utc::now()));
+    let sender = state_dynamic.watchers_send.borrow_mut().take();
+    if let Some(sender) = sender {
+        _ = sender.send(Event {
+            task: task.id.clone(),
+            event: EventType::TransitiveOn(on),
+        }) as Result<_, _>;
+        let is_effective_on = is_control_effective_on(task);
+        if was_effective_on != is_effective_on {
+            _ = sender.send(Event {
+                task: task.id.clone(),
+                event: EventType::EffectiveOn(is_effective_on),
+            }) as Result<_, _>;
+        }
+        *state_dynamic.watchers_send.borrow_mut() = Some(sender);
+    }
+}
+
+pub(crate) fn direct_on_set(state_dynamic: &StateDynamic, task: &TaskState_, on: bool) {
+    let was_effective_on = is_control_effective_on(task);
+    eprintln!("      =direct_on {} {:?}", task.id, on);
+    task.direct_on.set((on, Utc::now()));
+    let sender = state_dynamic.watchers_send.borrow_mut().take();
+    if let Some(sender) = sender {
+        _ = sender.send(Event {
+            task: task.id.clone(),
+            event: EventType::DirectOn(on),
+        }) as Result<_, _>;
+        let is_effective_on = is_control_effective_on(task);
+        if was_effective_on != is_effective_on {
+            _ = sender.send(Event {
+                task: task.id.clone(),
+                event: EventType::EffectiveOn(is_effective_on),
+            }) as Result<_, _>;
+        }
+        *state_dynamic.watchers_send.borrow_mut() = Some(sender);
+    }
+}
+
+pub(crate) fn awueo_set(state_dynamic: &StateDynamic, task: &TaskState_, on: bool) {
+    let was_effective_on = is_control_effective_on(task);
+    eprintln!("      =awueo {} {:?}", task.id, on);
+    task.awueo.set(on);
+    let sender = state_dynamic.watchers_send.borrow_mut().take();
+    if let Some(sender) = sender {
+        let is_effective_on = is_control_effective_on(task);
+        if was_effective_on != is_effective_on {
+            _ = sender.send(Event {
+                task: task.id.clone(),
+                event: EventType::EffectiveOn(is_effective_on),
+            });
+        }
+        *state_dynamic.watchers_send.borrow_mut() = Some(sender);
+    }
+}
 
 pub(crate) fn walk_task_upstream<
     'a,
@@ -75,6 +152,22 @@ pub(crate) fn is_actual_all_upstream_tasks_started(state_dynamic: &StateDynamic,
 pub(crate) fn are_all_downstream_tasks_stopped(state_dynamic: &StateDynamic, task: &TaskState_) -> bool {
     for (task_id, _) in task.downstream.borrow().iter() {
         if get_task(state_dynamic, task_id).actual.get().0 != Actual::Stopped {
+            return false;
+        }
+    }
+    return true;
+}
+
+pub(crate) fn are_all_strong_downstream_direct_or_transitive_off(
+    state_dynamic: &StateDynamic,
+    task: &TaskState_,
+) -> bool {
+    for (downstream_id, downstream_type) in task.downstream.borrow().iter() {
+        if *downstream_type != DependencyType::Strong {
+            continue;
+        }
+        let downstream_task = get_task(state_dynamic, downstream_id);
+        if !(downstream_task.direct_on.get().0 || downstream_task.transitive_on.get().0) {
             return false;
         }
     }

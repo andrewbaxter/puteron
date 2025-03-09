@@ -15,9 +15,9 @@ use {
             TaskStateSpecific,
             TaskState_,
         },
-        task_plan::{
-            plan_set_direct,
+        task_control::{
             plan_event_stopped,
+            plan_set_direct,
             plan_set_direct_off,
             plan_set_direct_on,
             ExecutePlan,
@@ -27,7 +27,6 @@ use {
             walk_task_upstream,
         },
     },
-    chrono::DateTime,
     crate::interface::{
         ipc::Actual,
         task::{
@@ -39,11 +38,14 @@ use {
             TaskSpecShort,
         },
     },
+    chrono::DateTime,
     std::cell::{
         Cell,
         RefCell,
     },
-    tokio::sync::oneshot,
+    tokio::sync::{
+        oneshot,
+    },
 };
 
 fn check<
@@ -221,7 +223,7 @@ fn build_state(tasks: impl IntoIterator<Item = TaskState_>) -> StateDynamic {
         schedule_top: Default::default(),
         schedule: Default::default(),
         notify_reschedule: Default::default(),
-        watchers: Default::default(),
+        idle_watchers: Default::default(),
         watchers_send: Default::default(),
     };
     for test_task in tasks.into_iter() {

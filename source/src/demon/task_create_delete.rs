@@ -23,7 +23,11 @@ use {
     crate::interface::{
         self,
         base::TaskId,
-        ipc::Actual,
+        ipc::{
+            Actual,
+            Event,
+            EventType,
+        },
         task::Task,
     },
     chrono::Utc,
@@ -170,7 +174,26 @@ pub(crate) fn build_task(state_dynamic: &mut StateDynamic, task_id: TaskId, spec
         started_waiters: Default::default(),
         stopped_waiters: Default::default(),
     });
-    state_dynamic.tasks.insert(task_id, task);
+    state_dynamic.tasks.insert(task_id.clone(), task);
+    {
+        let task = &state_dynamic.task_alloc[task];
+        let sender = state_dynamic.watchers_send.borrow_mut().take();
+        if let Some(sender) = sender{
+            for ev in [Event {
+                task: task_id.clone(),
+                event: EventType::DirectOn(task.direct_on.get().0),
+            }, Event {
+                task: task_id.clone(),
+                event: EventType::TransitiveOn(task.transitive_on.get().0),
+            }, Event {
+                task: task_id.clone(),
+                event: EventType::EffectiveOn(is_control_effective_on(task)),
+            }] {
+                _ = sender.send(ev) as Result<_, _>;
+            }
+            *state_dynamic.watchers_send.borrow_mut() = Some(sender);
+        }
+    }
 }
 
 pub(crate) fn delete_task(state_dynamic: &mut StateDynamic, task_id: &TaskId) {

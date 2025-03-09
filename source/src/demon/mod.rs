@@ -2,9 +2,9 @@ mod state;
 mod schedule;
 mod task_create_delete;
 mod task_util;
-mod task_execute;
-mod task_plan;
-mod task_plan_test;
+mod task_actual;
+mod task_control;
+mod task_control_test;
 
 use {
     crate::{
@@ -20,6 +20,7 @@ use {
                 ipc_path,
                 Actual,
                 Event,
+                EventType,
                 RespScheduleEntry,
                 TaskDownstreamStatus,
                 TaskStatus,
@@ -67,14 +68,14 @@ use {
         },
         time::Duration,
     },
+    task_actual::{
+        set_task_direct_off,
+        set_task_direct_on,
+    },
     task_create_delete::{
         build_task,
         delete_task,
         validate_new_task,
-    },
-    task_execute::{
-        set_task_direct_off,
-        set_task_direct_on,
     },
     task_util::{
         get_task,
@@ -137,7 +138,7 @@ pub async fn main(debug: bool, log: &Log, args: DemonRunArgs) -> Result<(), loga
             schedule_top: Default::default(),
             schedule: Default::default(),
             notify_reschedule: notify_reschedule.clone(),
-            watchers: Default::default(),
+            idle_watchers: Default::default(),
             watchers_send: Default::default(),
         }),
         tokio_tasks: Default::default(),
@@ -308,9 +309,9 @@ pub async fn main(debug: bool, log: &Log, args: DemonRunArgs) -> Result<(), loga
                                 .push(ScheduleEvent::Rule(spec));
                         },
                         ScheduleEvent::WatcherExpire(pid) => {
-                            if let Some((last_active, _receiver)) = state_dynamic.watchers.get(&pid) {
+                            if let Some((last_active, _receiver)) = state_dynamic.idle_watchers.get(&pid) {
                                 if Instant::now().duration_since(*last_active) > watcher_timeout() {
-                                    state_dynamic.watchers.remove(&pid);
+                                    state_dynamic.idle_watchers.remove(&pid);
                                 }
                             }
                         },
@@ -361,31 +362,39 @@ async fn handle_ipc(state: Arc<State>, mut conn: ipc::ServerConn) {
                         // Create or get existing receiver if pid already subscribed
                         let mut receiver = shed!{
                             let mut state_dynamic = state.dynamic.lock().unwrap();
-                            if let Some((_, receiver)) = state_dynamic.watchers.remove(&pid) {
+                            if let Some((_, receiver)) = state_dynamic.idle_watchers.remove(&pid) {
                                 break receiver;
                             };
                             for (task_id, task) in state_dynamic.tasks.iter() {
                                 let task = &state_dynamic.task_alloc[*task];
                                 out.push(Event {
                                     task: task_id.clone(),
-                                    event_type: interface::ipc::EventType::DirectOn(task.direct_on.get().0),
+                                    event: EventType::DirectOn(task.direct_on.get().0),
                                 });
                                 out.push(Event {
                                     task: task_id.clone(),
-                                    event_type: interface::ipc::EventType::Actual(task.actual.get().0),
+                                    event: EventType::TransitiveOn(task.transitive_on.get().0),
+                                });
+                                out.push(Event {
+                                    task: task_id.clone(),
+                                    event: EventType::DirectOn(is_control_effective_on(task)),
+                                });
+                                out.push(Event {
+                                    task: task_id.clone(),
+                                    event: EventType::Actual(task.actual.get().0),
                                 });
                             }
                             let sender =
                                 state_dynamic.watchers_send.take().unwrap_or_else(|| broadcast::Sender::new(1000));
                             let receiver = sender.subscribe();
-                            state_dynamic.watchers_send = Some(sender);
+                            *state_dynamic.watchers_send.borrow_mut() = Some(sender);
                             break receiver;
                         };
 
                         // Read queued events or wait for next event
-                        'loop_ : loop {
+                        'done_reading : loop {
                             // Read anything queued
-                            shed!{
+                            loop {
                                 match receiver.try_recv() {
                                     Ok(v) => {
                                         out.push(v);
@@ -395,11 +404,11 @@ async fn handle_ipc(state: Arc<State>, mut conn: ipc::ServerConn) {
                                             if out.is_empty() {
                                                 break;
                                             } else {
-                                                break 'loop_;
+                                                break 'done_reading;
                                             }
                                         },
                                         broadcast::error::TryRecvError::Closed => {
-                                            break 'loop_;
+                                            break 'done_reading;
                                         },
                                         broadcast::error::TryRecvError::Lagged(_) => {
                                             return Err(format!("Too slow reading events, connection broken"));
@@ -415,7 +424,7 @@ async fn handle_ipc(state: Arc<State>, mut conn: ipc::ServerConn) {
                                 },
                                 Err(e) => match e {
                                     broadcast::error::RecvError::Closed => {
-                                        break 'loop_;
+                                        break 'done_reading;
                                     },
                                     broadcast::error::RecvError::Lagged(_) => {
                                         return Err(format!("Too slow reading events, connection broken"));
@@ -427,7 +436,7 @@ async fn handle_ipc(state: Arc<State>, mut conn: ipc::ServerConn) {
                         // Park receiver until next ipc or it expires
                         {
                             let mut state_dynamic = state.dynamic.lock().unwrap();
-                            state_dynamic.watchers.insert(pid, (Instant::now(), receiver));
+                            state_dynamic.idle_watchers.insert(pid, (Instant::now(), receiver));
                             state_dynamic
                                 .schedule
                                 .entry(Instant::now() + watcher_timeout())
@@ -435,6 +444,8 @@ async fn handle_ipc(state: Arc<State>, mut conn: ipc::ServerConn) {
                                 .push(ScheduleEvent::WatcherExpire(pid));
                             state_dynamic.notify_reschedule.notify_one();
                         }
+
+                        // Respond
                         return Ok(rr(out));
                     },
                     ipc::ServerReq::TaskAdd(rr, m) => {

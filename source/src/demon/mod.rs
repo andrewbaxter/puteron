@@ -60,7 +60,10 @@ use {
         TaskStateSpecific,
     },
     std::{
-        collections::HashMap,
+        collections::{
+            HashMap,
+            HashSet,
+        },
         env,
         sync::{
             Arc,
@@ -128,6 +131,7 @@ pub async fn main(debug: bool, log: &Log, args: DemonRunArgs) -> Result<(), loga
     let notify_reschedule = Arc::new(Notify::new());
     let state = Arc::new(State {
         debug: debug,
+        log_type: config.log_type,
         shutdown: Default::default(),
         log: log.clone(),
         task_dirs: config.task_dirs,
@@ -148,6 +152,7 @@ pub async fn main(debug: bool, log: &Log, args: DemonRunArgs) -> Result<(), loga
 
         // # Create task states from specs
         let mut errors = vec![];
+        let mut missing_upstreams = HashSet::new();
         while !specs.is_empty() {
             let mut did_work = false;
             let task_ids = specs.keys().cloned().collect::<Vec<_>>();
@@ -173,6 +178,8 @@ pub async fn main(debug: bool, log: &Log, args: DemonRunArgs) -> Result<(), loga
                         all_upstream_created = false;
                     } else {
                         // missing, pretend ok - missing will be logged later when validating
+                        all_upstream_created = false;
+                        missing_upstreams.insert((task_id.clone(), upstream_id.clone()));
                     }
                 }
                 if !all_upstream_created {
@@ -186,12 +193,28 @@ pub async fn main(debug: bool, log: &Log, args: DemonRunArgs) -> Result<(), loga
                 build_task(&mut state_dynamic, task_id.clone(), spec);
             }
             if !did_work {
-                errors.push(
-                    loga::err_with(
-                        "One or more tasks have cycles in their dependencies",
-                        ea!(tasks = task_ids.dbg_str()),
-                    ),
-                );
+                if !missing_upstreams.is_empty() {
+                    errors.push(
+                        loga::err_with(
+                            "One or more tasks have invalid upsterams",
+                            ea!(
+                                missing =
+                                    missing_upstreams
+                                        .iter()
+                                        .map(|(k, v)| format!("{} -> {}", k, v))
+                                        .collect::<Vec<_>>()
+                                        .join(", ")
+                            ),
+                        ),
+                    );
+                } else {
+                    errors.push(
+                        loga::err_with(
+                            "One or more tasks have cycles in their dependencies or invalid upstreams",
+                            ea!(tasks = task_ids.dbg_str()),
+                        ),
+                    );
+                }
                 break;
             }
         }
@@ -209,6 +232,7 @@ pub async fn main(debug: bool, log: &Log, args: DemonRunArgs) -> Result<(), loga
         let mut state_dynamic = state.dynamic.lock().unwrap();
 
         // ## Start default-on tasks
+        eprintln!("starting default-on");
         for (id, task) in state_dynamic.tasks.iter().map(|(x, y)| (x.clone(), y.clone())).collect::<Vec<_>>() {
             let task = &state_dynamic.task_alloc[task];
             let direct_on;
@@ -228,6 +252,7 @@ pub async fn main(debug: bool, log: &Log, args: DemonRunArgs) -> Result<(), loga
             }
             set_task_direct_on(&state, &mut state_dynamic, &id);
         }
+        eprintln!("done starting default-on");
 
         // ## Schedule tasks
         populate_schedule(&mut state_dynamic);

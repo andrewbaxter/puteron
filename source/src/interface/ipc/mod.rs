@@ -24,12 +24,10 @@ use {
     },
 };
 
-/// Get the default ipc socket path.  Tries environment variable `PUTERON_IPC_SOCK`
-/// for a specific pathname, then `puteron.sock` in `XDG_RUNTIME_DIR`, then
-/// `/run/puteron.sock`. Because of this, when running as root it'll use a global
-/// location, when as a user it'll use the user's session run directory.
+/// Get the default ipc socket path.  Tries environment variable `PUTERON_SOCK` for
+/// a specific pathname, then `/run/puteron.sock`.
 pub fn ipc_path() -> Option<PathBuf> {
-    if let Ok(p) = env::var("PUTERON_IPC_SOCK") {
+    if let Ok(p) = env::var("PUTERON_SOCK") {
         return Some(PathBuf::from(p));
     }
     return Some(PathBuf::from("/run/puteron.sock"));

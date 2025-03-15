@@ -26,6 +26,17 @@ pub struct Environment {
     pub add: HashMap<String, String>,
 }
 
+#[derive(Serialize, Deserialize, Clone, JsonSchema, Default)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum LogType {
+    /// Default, all child stdout/stderr output goes to the puteron's stderr.
+    #[default]
+    Stderr,
+    /// All child stdout/stderr is sent to the syslog using the task id as the syslog
+    /// name.
+    Syslog,
+}
+
 #[derive(Serialize, Deserialize, Clone, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct Config {
@@ -35,4 +46,6 @@ pub struct Config {
     pub environment: Environment,
     #[serde(default)]
     pub task_dirs: Vec<PathBuf>,
+    #[serde(default)]
+    pub log_type: LogType,
 }

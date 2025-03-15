@@ -6,6 +6,11 @@ let
       default = false;
       description = "Enable debug logging";
     };
+    local = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = "For local (testing) operation - have child processes output to stdout/stderr rather than syslog";
+    };
     environment = lib.mkOption {
       type = lib.types.nullOr lib.types.attrs;
       default = null;
@@ -118,17 +123,20 @@ let
       # Build daemon config
       demonConfig = pkgs.writeTextFile {
         name = "puteron-${levelName}-config";
-        text = builtins.toJSON (builtins.listToAttrs (
-          [ ]
-          ++ (if options.environment != null then [{
-            name = "environment";
-            value = options.environment;
-          }] else [ ])
-          ++ [{
-            name = "task_dirs";
-            value = [ "${tasksDir}" ];
-          }]
-        ));
+        text = builtins.toJSON
+          ({
+            log_type = if config.puteron.local then "stderr" else "syslog";
+          } // (builtins.listToAttrs (
+            [ ]
+              ++ (if options.environment != null then [{
+              name = "environment";
+              value = options.environment;
+            }] else [ ])
+              ++ [{
+              name = "task_dirs";
+              value = [ "${tasksDir}" ];
+            }]
+          )));
         checkPhase = ''
           ${config.system.build.puteron.pkg}/bin/puteron demon $out --validate
         '';
@@ -152,7 +160,7 @@ let
             (name: value: lib.strings.hasSuffix suffix name)
             listenSystemd);
       script = pkgs.writeShellScript "puteron-${levelName}-script" (lib.concatStringsSep " " ([ ]
-        ++ (if config.puteron.debug then [ "RUST_BACKTRACE=1" ] else [ ])
+        ++ (if config.puteron.debug then [ "RUST_BACKTRACE=full" ] else [ ])
         ++ [ "exec ${pkg}/bin/puteron" "demon" "${demonConfig}" ]
         ++ (if config.puteron.debug then [ "--debug" ] else [ ])
       ));

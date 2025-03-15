@@ -6,6 +6,7 @@ use {
     crate::interface::{
         self,
         base::TaskId,
+        demon::LogType,
         ipc::{
             Actual,
             Event,
@@ -103,6 +104,7 @@ pub(crate) struct StateDynamic {
 
 pub(crate) struct State {
     pub(crate) debug: bool,
+    pub(crate) log_type: LogType,
     pub(crate) shutdown: CancellationToken,
     pub(crate) log: Log,
     pub(crate) task_dirs: Vec<PathBuf>,

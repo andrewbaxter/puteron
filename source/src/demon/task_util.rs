@@ -22,6 +22,19 @@ use {
 };
 
 pub(crate) fn actual_set(state_dynamic: &StateDynamic, task: &TaskState_, actual: Actual) {
+    match (task.actual.get().0, actual) {
+        (Actual::Stopped, Actual::Starting) |
+        (Actual::Starting, Actual::Started) |
+        (Actual::Starting, Actual::Stopping) |
+        (Actual::Started, Actual::Stopping) |
+        (Actual::Stopping, Actual::Stopped) |
+        (Actual::Stopping, Actual::Starting) => {
+            // ok transition
+        },
+        (f, t) => {
+            eprintln!("DEBUG invalid transition {} {:?} -> {:?}", task.id, f, t);
+        },
+    }
     eprintln!("      =actual {} {:?}", task.id, actual);
     task.actual.set((actual, Utc::now()));
     let sender = state_dynamic.watchers_send.borrow_mut().take();
@@ -167,7 +180,7 @@ pub(crate) fn are_all_strong_downstream_direct_or_transitive_off(
             continue;
         }
         let downstream_task = get_task(state_dynamic, downstream_id);
-        if !(downstream_task.direct_on.get().0 || downstream_task.transitive_on.get().0) {
+        if downstream_task.direct_on.get().0 || downstream_task.transitive_on.get().0 {
             return false;
         }
     }

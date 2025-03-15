@@ -178,7 +178,7 @@ pub(crate) fn build_task(state_dynamic: &mut StateDynamic, task_id: TaskId, spec
     {
         let task = &state_dynamic.task_alloc[task];
         let sender = state_dynamic.watchers_send.borrow_mut().take();
-        if let Some(sender) = sender{
+        if let Some(sender) = sender {
             for ev in [Event {
                 task: task_id.clone(),
                 event: EventType::DirectOn(task.direct_on.get().0),

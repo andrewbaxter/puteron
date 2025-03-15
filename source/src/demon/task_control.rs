@@ -33,6 +33,7 @@ use {
 #[derive(Default, Debug)]
 pub(crate) struct ExecutePlan {
     // For processless (instant transition) tasks
+    pub(crate) log_starting: HashSet<TaskId>,
     pub(crate) log_started: HashSet<TaskId>,
     pub(crate) log_stopping: HashSet<TaskId>,
     pub(crate) log_stopped: HashSet<TaskId>,
@@ -56,7 +57,7 @@ pub(crate) fn plan_event_stopping(state_dynamic: &StateDynamic, plan: &mut Execu
     frontier.extend(get_task(state_dynamic, task_id).downstream.borrow().keys().cloned());
     while let Some(upstream_id) = frontier.pop() {
         let upstream_task = get_task(state_dynamic, &upstream_id);
-        plan_actual_stop_one(state_dynamic, plan, &upstream_task);
+        plan_actual_stop_one(state_dynamic, plan, &upstream_task, true);
         frontier.extend(upstream_task.downstream.borrow().keys().cloned());
     }
 }
@@ -91,8 +92,10 @@ pub(crate) fn plan_actual_start_one(state_dynamic: &StateDynamic, plan: &mut Exe
     }
     match &task.specific {
         TaskStateSpecific::Empty(_) => {
-            actual_set(state_dynamic, task, Actual::Started);
+            plan.log_starting.insert(task.id.clone());
+            actual_set(state_dynamic, task, Actual::Starting);
             plan.log_started.insert(task.id.clone());
+            actual_set(state_dynamic, task, Actual::Started);
             return true;
         },
         TaskStateSpecific::Long(_) => {
@@ -113,11 +116,16 @@ pub(crate) fn plan_actual_start_one(state_dynamic: &StateDynamic, plan: &mut Exe
 }
 
 /// Return true if task is finished stopping (can continue with upstream).
-pub(crate) fn plan_actual_stop_one(state_dynamic: &StateDynamic, plan: &mut ExecutePlan, task: &TaskState_) {
-    if !are_all_downstream_tasks_stopped(state_dynamic, &task) {
+pub(crate) fn plan_actual_stop_one(
+    state_dynamic: &StateDynamic,
+    plan: &mut ExecutePlan,
+    task: &TaskState_,
+    force: bool,
+) {
+    if !force && !are_all_downstream_tasks_stopped(state_dynamic, &task) {
         return;
     }
-    if is_control_effective_on(task) && is_actual_all_upstream_tasks_started(state_dynamic, task) {
+    if !force && is_control_effective_on(task) && is_actual_all_upstream_tasks_started(state_dynamic, task) {
         return;
     }
     if task.actual.get().0 == Actual::Stopped {
@@ -125,8 +133,10 @@ pub(crate) fn plan_actual_stop_one(state_dynamic: &StateDynamic, plan: &mut Exec
     }
     match &task.specific {
         TaskStateSpecific::Empty(_) => {
-            actual_set(state_dynamic, task, Actual::Stopped);
+            plan.log_stopping.insert(task.id.clone());
+            actual_set(state_dynamic, task, Actual::Stopping);
             plan.log_stopped.insert(task.id.clone());
+            actual_set(state_dynamic, task, Actual::Stopped);
         },
         TaskStateSpecific::Long(_) => {
             plan.stop.insert(task.id.clone());
@@ -134,6 +144,8 @@ pub(crate) fn plan_actual_stop_one(state_dynamic: &StateDynamic, plan: &mut Exec
         TaskStateSpecific::Short(specific) => {
             if task.actual.get().0 == Actual::Started {
                 plan.log_stopping.insert(task.id.clone());
+                actual_set(state_dynamic, task, Actual::Stopping);
+                plan.log_stopped.insert(task.id.clone());
                 actual_set(state_dynamic, task, Actual::Stopped);
                 if let Some(ShortTaskStartedAction::Delete) = specific.spec.started_action {
                     eprintln!("plan stop one - delete {}", task.id);
@@ -156,13 +168,9 @@ pub(crate) fn plan_set_direct(
     eprintln!("set direct on={} -- {}", want_on, root_task_id);
 
     // # Inclusive upward strong - adjust transitive_on
-    let mut seen_upstream = HashSet::new();
     let mut upstream_frontier = vec![(true, root_task_id.clone())];
     while let Some((first_pass, upstream_id)) = upstream_frontier.pop() {
         eprintln!(" (weakly related) upstream {}; first {})", upstream_id, first_pass);
-        if seen_upstream.contains(&upstream_id) {
-            continue;
-        }
         if first_pass {
             let upstream_task = get_task(state_dynamic, &upstream_id);
 
@@ -187,7 +195,6 @@ pub(crate) fn plan_set_direct(
                 eprintln!(" --> already on = {}", want_on);
 
                 // No change, abort upwards propagation
-                seen_upstream.insert(upstream_id.clone());
                 continue;
             }
 
@@ -202,7 +209,6 @@ pub(crate) fn plan_set_direct(
                 }
             });
         } else {
-            seen_upstream.insert(upstream_id.clone());
             let upstream_task = get_task(state_dynamic, &upstream_id);
 
             // On changed, do cb
@@ -329,7 +335,7 @@ pub(crate) fn sync_actual_should_stop_related(state_dynamic: &StateDynamic, plan
                 } else {
                     eprintln!(" --> downstream {}", downstream_id);
                     let downstream_task = get_task(state_dynamic, &downstream_id);
-                    plan_actual_stop_one(state_dynamic, plan, &downstream_task);
+                    plan_actual_stop_one(state_dynamic, plan, &downstream_task, false);
                     seen.insert(downstream_id.clone());
                 }
             }
@@ -354,7 +360,9 @@ pub(crate) fn sync_actual_should_stop_related(state_dynamic: &StateDynamic, plan
 pub(crate) fn sanity_check(log: &loga::Log, state_dynamic: &StateDynamic, plan: &ExecutePlan) {
     let mut errors = vec![];
 
-    // Check transitive_on
+    // # Check transitive_on
+    //
+    // This must be done in graph order so that transitive values are correct.
     {
         let mut done = HashSet::new();
         loop {
@@ -365,7 +373,7 @@ pub(crate) fn sanity_check(log: &loga::Log, state_dynamic: &StateDynamic, plan: 
                 }
                 let task = state_dynamic.task_alloc.get(*task).unwrap();
                 let mut known = true;
-                let mut want_transitive_on = false;
+                let mut downstream_on = HashSet::new();
                 for (downstream_id, downstream_type) in task.downstream.borrow().iter() {
                     if *downstream_type != DependencyType::Strong {
                         continue;
@@ -376,22 +384,25 @@ pub(crate) fn sanity_check(log: &loga::Log, state_dynamic: &StateDynamic, plan: 
                     }
                     let downstream = get_task(state_dynamic, downstream_id);
                     if downstream.direct_on.get().0 || downstream.transitive_on.get().0 {
-                        want_transitive_on = true;
+                        downstream_on.insert(downstream_id.clone());
                     }
                 }
-                if known {
-                    if task.transitive_on.get().0 != want_transitive_on {
-                        errors.push(
-                            format!(
-                                "Task [{}] transitive_on mismatch: want {} have {}",
-                                task_id,
-                                want_transitive_on,
-                                task.transitive_on.get().0
-                            ),
-                        );
-                    }
-                    done.insert(task_id);
+                if !known {
+                    continue;
                 }
+                let want_transitive_on = !downstream_on.is_empty();
+                if task.transitive_on.get().0 != want_transitive_on {
+                    errors.push(
+                        format!(
+                            "Task [{}] transitive_on mismatch due to {:?}: want {} have {}",
+                            task_id,
+                            downstream_on,
+                            want_transitive_on,
+                            task.transitive_on.get().0
+                        ),
+                    );
+                }
+                done.insert(task_id);
             }
             if done.len() == initial_done_count {
                 break;
@@ -410,7 +421,7 @@ pub(crate) fn sanity_check(log: &loga::Log, state_dynamic: &StateDynamic, plan: 
                 }
                 let task = state_dynamic.task_alloc.get(*task).unwrap();
                 let mut known = true;
-                let mut want_awueo = true;
+                let mut upstream_off = HashSet::new();
                 walk_task_upstream(task, |upstream| {
                     for (upstream_id, upstream_type) in upstream {
                         if *upstream_type != DependencyType::Weak {
@@ -422,14 +433,21 @@ pub(crate) fn sanity_check(log: &loga::Log, state_dynamic: &StateDynamic, plan: 
                         }
                         let upstream = get_task(state_dynamic, upstream_id);
                         if !is_control_effective_on(upstream) {
-                            want_awueo = false;
+                            upstream_off.insert(upstream_id.clone());
                         }
                     }
                 });
+                let want_awueo = upstream_off.is_empty();
                 if known {
                     if task.awueo.get() != want_awueo {
                         errors.push(
-                            format!("Task [{}] awueo mismatch: want {} have {}", task_id, want_awueo, task.awueo.get()),
+                            format!(
+                                "Task [{}] awueo mismatch due to {:?}: want {} have {}",
+                                task_id,
+                                upstream_off,
+                                want_awueo,
+                                task.awueo.get()
+                            ),
                         );
                     }
                     done.insert(task_id);
@@ -470,7 +488,15 @@ pub(crate) fn sanity_check(log: &loga::Log, state_dynamic: &StateDynamic, plan: 
                 stop = true;
             },
         }
-        if is_control_effective_on(task) && is_actual_all_upstream_tasks_started(state_dynamic, task) && !start {
+        let mut is_actual_all_upstream_started2 = is_actual_all_upstream_tasks_started(state_dynamic, task);
+        walk_task_upstream(task, |upstream| {
+            for (upstream_id, _) in upstream {
+                if plan.stop.contains(upstream_id) {
+                    is_actual_all_upstream_started2 = false;
+                }
+            }
+        });
+        if is_control_effective_on(task) && is_actual_all_upstream_started2 && !start {
             errors.push(format!("Task [{}] on + all upstream started, but not starting", task_id));
         }
         let mut no_downstream_not_stopped = true;
@@ -481,12 +507,20 @@ pub(crate) fn sanity_check(log: &loga::Log, state_dynamic: &StateDynamic, plan: 
                 break;
             }
         }
-        if (!is_actual_all_upstream_tasks_started(state_dynamic, task) ||
-            (!is_control_effective_on(task) && no_downstream_not_stopped)) &&
-            !stop {
-            errors.push(
-                format!("Task [{}] upstream not running or off and no downstream running, but not stopping", task_id),
-            );
+        if !is_control_effective_on(task) && no_downstream_not_stopped && !stop {
+            errors.push(format!("Task [{}] off and no downstream running but not stopping", task_id));
+        }
+        if !is_actual_all_upstream_started2 && !stop {
+            let mut not_running = HashSet::new();
+            walk_task_upstream(task, |upstream| {
+                for (upstream_id, _upstream_type) in upstream {
+                    let upstream = get_task(state_dynamic, upstream_id);
+                    if upstream.actual.get().0 != Actual::Started {
+                        not_running.insert(upstream_id.clone());
+                    }
+                }
+            });
+            errors.push(format!("Task [{}] upstream not running {:?} but not stopping", task_id, not_running));
         }
     }
     if !errors.is_empty() {

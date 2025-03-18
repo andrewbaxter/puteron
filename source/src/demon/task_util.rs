@@ -32,10 +32,9 @@ pub(crate) fn actual_set(state_dynamic: &StateDynamic, task: &TaskState_, actual
             // ok transition
         },
         (f, t) => {
-            eprintln!("DEBUG invalid transition {} {:?} -> {:?}", task.id, f, t);
+            eprintln!("ASSERTION! Invalid actual transition: {} {:?} -> {:?}", task.id, f, t);
         },
     }
-    eprintln!("      =actual {} {:?}", task.id, actual);
     task.actual.set((actual, Utc::now()));
     let sender = state_dynamic.watchers_send.borrow_mut().take();
     if let Some(sender) = sender {
@@ -49,7 +48,6 @@ pub(crate) fn actual_set(state_dynamic: &StateDynamic, task: &TaskState_, actual
 
 pub(crate) fn transitive_on_set(state_dynamic: &StateDynamic, task: &TaskState_, on: bool) {
     let was_effective_on = is_control_effective_on(task);
-    eprintln!("      =transitive_on {} {:?}", task.id, on);
     task.transitive_on.set((on, Utc::now()));
     let sender = state_dynamic.watchers_send.borrow_mut().take();
     if let Some(sender) = sender {
@@ -70,7 +68,6 @@ pub(crate) fn transitive_on_set(state_dynamic: &StateDynamic, task: &TaskState_,
 
 pub(crate) fn direct_on_set(state_dynamic: &StateDynamic, task: &TaskState_, on: bool) {
     let was_effective_on = is_control_effective_on(task);
-    eprintln!("      =direct_on {} {:?}", task.id, on);
     task.direct_on.set((on, Utc::now()));
     let sender = state_dynamic.watchers_send.borrow_mut().take();
     if let Some(sender) = sender {
@@ -91,7 +88,6 @@ pub(crate) fn direct_on_set(state_dynamic: &StateDynamic, task: &TaskState_, on:
 
 pub(crate) fn awueo_set(state_dynamic: &StateDynamic, task: &TaskState_, on: bool) {
     let was_effective_on = is_control_effective_on(task);
-    eprintln!("      =awueo {} {:?}", task.id, on);
     task.awueo.set(on);
     let sender = state_dynamic.watchers_send.borrow_mut().take();
     if let Some(sender) = sender {

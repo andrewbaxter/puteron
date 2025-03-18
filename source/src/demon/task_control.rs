@@ -64,28 +64,22 @@ pub(crate) fn plan_event_stopping(state_dynamic: &StateDynamic, plan: &mut Execu
 
 /// After state change
 pub(crate) fn plan_event_stopped(state_dynamic: &StateDynamic, plan: &mut ExecutePlan, task_id: &TaskId) {
-    eprintln!("plan event stopped {}--", task_id);
     sync_actual_should_stop_related(state_dynamic, plan, task_id);
-    eprintln!("plan event stopped {}--done", task_id);
 }
 
 /// Return true if started - downstream can be started now.
 pub(crate) fn plan_actual_start_one(state_dynamic: &StateDynamic, plan: &mut ExecutePlan, task: &TaskState_) -> bool {
     if !is_control_effective_on(task) {
-        eprintln!("   --> not effective on");
         return false;
     }
     if !is_actual_all_upstream_tasks_started(state_dynamic, task) {
-        eprintln!("   --> not all upstream started");
         return false;
     }
     match task.actual.get().0 {
         Actual::Started => {
-            eprintln!("   --> already started");
             return true;
         },
         Actual::Starting | Actual::Stopping => {
-            eprintln!("   --> starting or stopping");
             return false;
         },
         Actual::Stopped => { },
@@ -148,7 +142,6 @@ pub(crate) fn plan_actual_stop_one(
                 plan.log_stopped.insert(task.id.clone());
                 actual_set(state_dynamic, task, Actual::Stopped);
                 if let Some(ShortTaskStartedAction::Delete) = specific.spec.started_action {
-                    eprintln!("plan stop one - delete {}", task.id);
                     plan.delete.insert(task.id.clone());
                 }
             } else {
@@ -165,12 +158,9 @@ pub(crate) fn plan_set_direct(
     // Called for each task whose state was modified, depth first.
     mut changed_cb: impl FnMut(&TaskState_),
 ) {
-    eprintln!("set direct on={} -- {}", want_on, root_task_id);
-
     // # Inclusive upward strong - adjust transitive_on
     let mut upstream_frontier = vec![(true, root_task_id.clone())];
     while let Some((first_pass, upstream_id)) = upstream_frontier.pop() {
-        eprintln!(" (weakly related) upstream {}; first {})", upstream_id, first_pass);
         if first_pass {
             let upstream_task = get_task(state_dynamic, &upstream_id);
 
@@ -192,8 +182,6 @@ pub(crate) fn plan_set_direct(
 
             // If no change, abort ascent
             if was_on == want_on {
-                eprintln!(" --> already on = {}", want_on);
-
                 // No change, abort upwards propagation
                 continue;
             }
@@ -228,7 +216,6 @@ pub(crate) fn plan_set_direct(
                 let mut downstream_frontier = vec![];
                 push_weak_downstream(&mut downstream_frontier, upstream_task);
                 while let Some(downstream_id) = downstream_frontier.pop() {
-                    eprintln!(" (sync awueo down) {}", downstream_id);
                     let downstream_task = get_task(state_dynamic, &downstream_id);
                     if downstream_task.awueo.get() == want_on {
                         // No change
@@ -241,7 +228,6 @@ pub(crate) fn plan_set_direct(
 
                     // Update state
                     awueo_set(state_dynamic, downstream_task, want_on);
-                    eprintln!("   (( awueo={} for {}", want_on, downstream_id);
 
                     // Awueo changed, do cb
                     changed_cb(downstream_task);
@@ -260,7 +246,6 @@ pub(crate) fn sync_actual_should_start_downstream(
     root_task_id: &TaskId,
     task: &TaskState_,
 ) {
-    eprintln!(" (sync actual down) down {})", root_task_id);
     if plan_actual_start_one(state_dynamic, plan, task) {
         sync_actual_should_start_downstream_exclusive(state_dynamic, plan, root_task_id);
     }
@@ -268,7 +253,6 @@ pub(crate) fn sync_actual_should_start_downstream(
 
 pub(crate) fn plan_set_direct_on(state_dynamic: &StateDynamic, plan: &mut ExecutePlan, root_task_id: &TaskId) {
     plan_set_direct(state_dynamic, root_task_id, true, |task| {
-        eprintln!(" -- start weakly related {}", task.id);
         plan_actual_start_one(state_dynamic, plan, task);
     });
     sync_actual_should_start_downstream(state_dynamic, plan, root_task_id, get_task(state_dynamic, root_task_id));
@@ -292,13 +276,10 @@ fn sync_actual_should_start_downstream_exclusive(
 
     push_downstream(&mut frontier, get_task(state_dynamic, from_task_id));
     while let Some(downstream_id) = frontier.pop() {
-        eprintln!(" (sync actual down2) down {})", downstream_id);
         let downstream = get_task(state_dynamic, &downstream_id);
         if !is_control_effective_on(&downstream) {
-            eprintln!("  --> not on");
             continue;
         }
-        eprintln!("  --> starting");
         if !plan_actual_start_one(state_dynamic, plan, &downstream) {
             continue;
         }
@@ -310,7 +291,6 @@ pub(crate) fn sync_actual_should_stop_related(state_dynamic: &StateDynamic, plan
     let mut seen = HashSet::new();
     let mut upstream_frontier = vec![task_id.clone()];
     while let Some(upstream_id) = upstream_frontier.pop() {
-        eprintln!("propagate stop, at upstream {}", upstream_id);
         if seen.contains(&upstream_id) {
             continue;
         }
@@ -333,7 +313,6 @@ pub(crate) fn sync_actual_should_stop_related(state_dynamic: &StateDynamic, plan
                         downstream_frontier.push((true, k.clone()));
                     }
                 } else {
-                    eprintln!(" --> downstream {}", downstream_id);
                     let downstream_task = get_task(state_dynamic, &downstream_id);
                     plan_actual_stop_one(state_dynamic, plan, &downstream_task, false);
                     seen.insert(downstream_id.clone());

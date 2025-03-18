@@ -201,7 +201,7 @@ pub async fn main(debug: bool, log: &Log, args: DemonRunArgs) -> Result<(), loga
                                 missing =
                                     missing_upstreams
                                         .iter()
-                                        .map(|(k, v)| format!("{} -> {}", k, v))
+                                        .map(|(k, v)| format!("upstream [{}] (from [{}])", v, k))
                                         .collect::<Vec<_>>()
                                         .join(", ")
                             ),
@@ -232,7 +232,6 @@ pub async fn main(debug: bool, log: &Log, args: DemonRunArgs) -> Result<(), loga
         let mut state_dynamic = state.dynamic.lock().unwrap();
 
         // ## Start default-on tasks
-        eprintln!("starting default-on");
         for (id, task) in state_dynamic.tasks.iter().map(|(x, y)| (x.clone(), y.clone())).collect::<Vec<_>>() {
             let task = &state_dynamic.task_alloc[task];
             let direct_on;
@@ -252,7 +251,6 @@ pub async fn main(debug: bool, log: &Log, args: DemonRunArgs) -> Result<(), loga
             }
             set_task_direct_on(&state, &mut state_dynamic, &id);
         }
-        eprintln!("done starting default-on");
 
         // ## Schedule tasks
         populate_schedule(&mut state_dynamic);

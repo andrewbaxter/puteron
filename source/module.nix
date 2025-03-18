@@ -92,8 +92,8 @@ let
   # Filtered systemd interop lists
   listenSystemd =
     if options.listenSystemd != null
-    then lib.attrsets.filterAttrs (name: value: value != null) config.puteron.listenSystemd
-    else { };
+    then lib.attrsets.mapAttrsToList (k: v: k) (lib.attrsets.filterAttrs (name: value: value) config.puteron.listenSystemd)
+    else [ ];
   controlSystemd =
     if options.controlSystemd != null
     then lib.attrsets.filterAttrs (name: value: null != value) config.puteron.controlSystemd
@@ -142,23 +142,28 @@ let
         '';
       };
 
-      # Build hooks for systemd services hooked with `empty` tasks 
-      buildSystemdHooks = type:
-        let
-          suffix = ".${type}";
-        in
-        lib.attrsets.mapAttrs'
-          (name: value: {
-            name = lib.strings.removeSuffix suffix name;
-            value =
-              {
-                serviceConfig.ExecStartPost = "${pkg}/bin/puteron on ${mapSystemdTaskName name}";
-                serviceConfig.ExecStopPre = "${pkg}/bin/puteron off ${mapSystemdTaskName name}";
-              };
+      systemdHookHelpers = builtins.listToAttrs (map
+        (unit:
+          let
+            mangledName = (builtins.replaceStrings [ "." ] [ "-" ] unit) + "-puteron-hook";
+          in
+          {
+            name = mangledName;
+            value = {
+              serviceConfig.Type = "oneshot";
+              serviceConfig.RemainAfterExit = "yes";
+              startLimitIntervalSec = 0;
+              serviceConfig.ExecStart = pkgs.writeShellScript "${mangledName}-start" ''
+                ${pkg}/bin/puteron on ${mapSystemdTaskName unit}
+              '';
+              serviceConfig.ExecStop = pkgs.writeShellScript "${mangledName}-stop" ''
+                ${pkg}/bin/puteron on ${mapSystemdTaskName unit}
+              '';
+              wantedBy = [ unit ];
+              after = [ unit ];
+            };
           })
-          (lib.attrsets.filterAttrs
-            (name: value: lib.strings.hasSuffix suffix name)
-            listenSystemd);
+        listenSystemd);
       script = pkgs.writeShellScript "puteron-${levelName}-script" (lib.concatStringsSep " " ([ ]
         ++ (if config.puteron.debug then [ "RUST_BACKTRACE=full" ] else [ ])
         ++ [ "exec ${pkg}/bin/puteron" "demon" "${demonConfig}" ]
@@ -170,23 +175,19 @@ let
 
       systemdServices = { }
         # Root service
-        // (if config.puteron.enable then {
-        puteron = {
-          wantedBy = [ wantedBy ];
-          serviceConfig.Type = "simple";
-          startLimitIntervalSec = 0;
-          serviceConfig.Restart = "always";
-          serviceConfig.RestartSec = 60;
-          script = "exec ${script}";
-        };
-      } else { })
-        // buildSystemdHooks "service";
-      systemdTargets = buildSystemdHooks "target";
-      systemdMounts = map
-        (mount: {
-          where = mount.name;
-        } // mount.value)
-        (lib.attrsToList (buildSystemdHooks "mount"));
+        // (
+        if config.puteron.enable then {
+          puteron = {
+            wantedBy = [ wantedBy ];
+            serviceConfig.Type = "simple";
+            startLimitIntervalSec = 0;
+            serviceConfig.Restart = "always";
+            serviceConfig.RestartSec = 60;
+            script = "exec ${script}";
+          };
+        } else { }
+      )
+        // systemdHookHelpers;
     };
 
   # Generate at root level
@@ -216,14 +217,14 @@ in
     ({ ... }: {
       config.puteron.tasks = { }
 
-        // (lib.attrsets.mapAttrs'
-        (name: value: {
-          name = mapSystemdTaskName name;
+        // (lib.attrsets.listToAttrs (map
+        (unit: {
+          name = mapSystemdTaskName unit;
           value = {
             type = "empty";
           };
         })
-        listenSystemd)
+        listenSystemd))
 
         // (lib.attrsets.mapAttrs'
         (name: value: {
@@ -254,7 +255,5 @@ in
     # Assemble root config
     system.build.puteron.script = root.script;
     systemd.services = root.systemdServices;
-    systemd.targets = root.systemdTargets;
-    systemd.mounts = root.systemdMounts;
   };
 }

@@ -290,9 +290,7 @@ fn event_starting_actual(state: &Arc<State>, state_dynamic: &StateDynamic, task_
 
 fn event_starting(state: &Arc<State>, task_id: &TaskId) {
     let state_dynamic = state.dynamic.lock().unwrap();
-    eprintln!("== event starting {}\n{}", task_id, "=".repeat(20));
     event_starting_actual(state, &state_dynamic, task_id);
-    eprintln!("{}", "-".repeat(20));
 }
 
 /// For use during execute (as part of existing event atomic event - while already
@@ -321,7 +319,6 @@ fn event_stopping_actual(state_dynamic: &StateDynamic, task_id: &TaskId, failed:
 
 fn event_stopping(state: &Arc<State>, task_id: &TaskId, failed: bool) {
     let mut state_dynamic = state.dynamic.lock().unwrap();
-    eprintln!("== event stopping {}\n{}", task_id, "=".repeat(20));
 
     // Update actual state
     event_stopping_actual(&state_dynamic, task_id, failed);
@@ -332,13 +329,11 @@ fn event_stopping(state: &Arc<State>, task_id: &TaskId, failed: bool) {
 
     // Execute graph changes
     execute(state, &mut state_dynamic, plan);
-    eprintln!("{}", "-".repeat(20));
 }
 
 /// After state change
 fn event_started(state: &Arc<State>, task_id: &TaskId) {
     let mut state_dynamic = state.dynamic.lock().unwrap();
-    eprintln!("== event started {}\n{}", task_id, "=".repeat(20));
 
     // Update actual
     let task = get_task(&state_dynamic, task_id);
@@ -392,7 +387,6 @@ fn event_started(state: &Arc<State>, task_id: &TaskId) {
             plan_set_direct_off(&state_dynamic, &mut plan, task_id);
         },
     }
-    eprintln!("{} started - effective on {}", task_id, is_control_effective_on(task));
     if !is_control_effective_on(task) {
         sync_actual_should_stop_related(&state_dynamic, &mut plan, task_id);
     } else {
@@ -401,13 +395,11 @@ fn event_started(state: &Arc<State>, task_id: &TaskId) {
 
     // Execute graph changes
     execute(state, &mut state_dynamic, plan);
-    eprintln!("{}", "-".repeat(20));
 }
 
 /// After state change
 fn event_stopped(state: &Arc<State>, task_id: &TaskId) {
     let mut state_dynamic = state.dynamic.lock().unwrap();
-    eprintln!("== event stopped {}\n{}", task_id, "=".repeat(20));
 
     // Actual changes
     let task = get_task(&state_dynamic, task_id);
@@ -440,7 +432,6 @@ fn event_stopped(state: &Arc<State>, task_id: &TaskId) {
 
     // Execute graph changes
     execute(state, &mut state_dynamic, plan);
-    eprintln!("{}", "-".repeat(20));
 }
 
 pub(crate) fn set_task_direct_on(state: &Arc<State>, state_dynamic: &mut StateDynamic, root_task_id: &TaskId) {

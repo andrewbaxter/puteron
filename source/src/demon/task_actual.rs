@@ -580,10 +580,17 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                                         Some(c) => match c {
                                             interface::task::StartedCheck::TcpSocket(addr) => {
                                                 loop {
-                                                    if timeout(Duration::from_secs(1), TcpStream::connect(addr))
-                                                        .await
-                                                        .is_ok() {
-                                                        break;
+                                                    match async {
+                                                        timeout(Duration::from_secs(1), TcpStream::connect(addr))
+                                                            .await
+                                                            .map_err(|_| ())?
+                                                            .map_err(|_| ())?;
+                                                        return Ok(()) as Result<_, ()>;
+                                                    }.await {
+                                                        Ok(_) => {
+                                                            break;
+                                                        },
+                                                        Err(_) => { },
                                                     }
                                                     sleep(Duration::from_secs(1)).await;
                                                 }
@@ -662,7 +669,7 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
                 *s.stop.borrow_mut() = Some(stop_tx);
                 state.tokio_tasks.spawn({
                     let spec = s.spec.clone();
-                    let task_id = task.id.clone();
+                    let task_id: String = task.id.clone();
                     let state = state.clone();
                     let log = log.clone();
                     async move {
@@ -789,13 +796,13 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
             TaskStateSpecific::Long(specific) => {
                 if let Some(stop) = specific.stop.take() {
                     event_stopping_actual(&state_dynamic, &task_id, false);
-                    _ = stop.send(());
+                    stop.send(()).map_err(|_| loga::err("")).ignore();
                 }
             },
             TaskStateSpecific::Short(specific) => {
                 if let Some(stop) = specific.stop.take() {
                     event_stopping_actual(&state_dynamic, &task_id, false);
-                    _ = stop.send(());
+                    stop.send(()).map_err(|_| loga::err("")).ignore();
                 }
             },
         }

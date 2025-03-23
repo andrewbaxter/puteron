@@ -110,12 +110,7 @@ pub(crate) fn plan_actual_start_one(state_dynamic: &StateDynamic, plan: &mut Exe
 }
 
 /// Return true if task is finished stopping (can continue with upstream).
-pub(crate) fn plan_actual_stop_one(
-    state_dynamic: &StateDynamic,
-    plan: &mut ExecutePlan,
-    task: &TaskState_,
-    force: bool,
-) {
+fn plan_actual_stop_one(state_dynamic: &StateDynamic, plan: &mut ExecutePlan, task: &TaskState_, force: bool) {
     if !force && !are_all_downstream_tasks_stopped(state_dynamic, &task) {
         return;
     }

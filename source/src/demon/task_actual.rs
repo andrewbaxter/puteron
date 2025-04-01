@@ -795,13 +795,21 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
             TaskStateSpecific::Empty(_) => unreachable!(),
             TaskStateSpecific::Long(specific) => {
                 if let Some(stop) = specific.stop.take() {
-                    event_stopping_actual(&state_dynamic, &task_id, false);
+                    if task.actual.get().0 != Actual::Stopping {
+                        // If a task dies and moves to "stopping" then we want to stop it, it'll reach
+                        // this code. Prevent duplicate state transitions.
+                        event_stopping_actual(&state_dynamic, &task_id, false);
+                    }
                     stop.send(()).map_err(|_| loga::err("")).ignore();
                 }
             },
             TaskStateSpecific::Short(specific) => {
                 if let Some(stop) = specific.stop.take() {
-                    event_stopping_actual(&state_dynamic, &task_id, false);
+                    if task.actual.get().0 != Actual::Stopping {
+                        // If a task dies and moves to "stopping" then we want to stop it, it'll reach
+                        // this code. Prevent duplicate state transitions.
+                        event_stopping_actual(&state_dynamic, &task_id, false);
+                    }
                     stop.send(()).map_err(|_| loga::err("")).ignore();
                 }
             },

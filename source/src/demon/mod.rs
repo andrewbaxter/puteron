@@ -277,16 +277,14 @@ pub async fn main(debug: bool, log: &Log, args: DemonRunArgs) -> Result<(), loga
         } else {
             message_socket = None;
         }
-        let mut sigint = Box::pin(sigint.recv());
-        let mut sigterm = Box::pin(sigterm.recv());
         loop {
             select!{
-                _ =& mut sigint => {
+                _ = sigint.recv() => {
                     log.log(loga::DEBUG, "Got SIGINT, shutting down.");
                     task_off_all(&state);
                     break;
                 },
-                _ =& mut sigterm => {
+                _ = sigterm.recv() => {
                     log.log(loga::DEBUG, "Got SIGTERM, shutting down.");
                     task_off_all(&state);
                     break;

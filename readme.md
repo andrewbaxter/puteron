@@ -1,66 +1,60 @@
 # What is Puteron
 
-Puteron is a process manager, like systemd or Runit or Shepherd or any number of others.
+Puteron is a process manager, like Systemd, Runit, Shepherd, etc..
 
 Here's a quick comparison to systemd:
 
 - Represents tasks (services) as a graph (like systemd)
 
-- Service startup checks for dependency sequencing! Wait for a file to appear, or a socket to open
+- Set your desired state and Puteron does what's required to establish exactly what you want and keep it that way. Intent and execution are separated - see `Control and actual state` below
 
 - One-directional dependencies: no "wanted by", "part of", "binds to", etc
 
-- Separation of intent and execution - see `Control and actual state` below
+- Easy startup checks! Wait for a file to appear or a socket to open before starting downstream tasks. Unlike systemd, dbus notification isn't supported.
 
 - JSON everywhere: configs, command output, command input
 
-- Minimal external dependencies so it's easy to relocate and test configs in local development environments
+- Minimal dependencies on external systems (dbus, hardcoded paths, polkit, logind, etc.) so it's easy to relocate and test configs in local development environments
 
 - Does one thing: manage processes
 
 # Architecture
 
-Puteron manages a graph of "tasks".
-
-Each task can depend on other tasks, referred to below as "upstream" dependencies (the simple converse of the relationship being "downstream"). An upstream dependency means that the task won't start until the upstream dependency has started, for all upstream dependencies.
+Puteron manages a dependency graph of "tasks". If task `B` depends on `A` we call `A` the upstream of `B`, and `B` the downstream of `A`. An upstream dependency tells Puteron that `A` can't run unless `B` has started, and if `B` stops then `A` must be stopped.
 
 There are two types of dependencies:
 
-- `strong` dependencies - turning a task on will try to start the dependency too.  For example, `my-app` depends on `mysql`.
+- `strong` dependencies - turning a task on will try to start the upstream dependency too. For example, `my-app` should start `mysql`.
 
-- `weak` dependencies - the task won't start until the dependency turns on.
+- `weak` dependencies - the task won't start until the dependency turns on. For example `my-app-monitor` can be turned on, but won't start until `my-app` is also started.
 
 ## Control and actual state
 
-The actual operation of Puteron is then determined by the "control" state.
+The above "turning a task on" is the "control" state. Control state is `on` or `off`.
 
-Tasks are either on or off (the "control state"), and started or stopped (or starting/stopping... the "actual state").
+The "actual state" is the result of Puteron trying to establish the control state. Actual state is `stopped`, `starting`, `started`, `stopping`.
 
 ### Control state
 
-The control state represents your intentions or the desired state of the system.  Puteron tries to make changes to match the desired state while obeying the constraints you've defined in the configs (dependencies, dependency strength, startup checks, etc).
+Internally, the control state is divided into three parts: `direct_on`, `transitive_on`, and `effective_on`.
 
-The control state is further divided into two three parts: `direct_on`, `transitive_on`, and `effective_on`.
+- `direct_on` is whether what you, the user, specify (i.e. by configuring a task as `default_on` or by running `task on`).
 
-- `direct_on` is whether the user requested the task to run directly (i.e. by directly setting it to `default_on` or by running `task on`).
-
-- `transitive_on` is whether this task needs to be started for another task with `direct_on` to run via some chain of "strong" dependencies.
+- `transitive_on` is established when a task, connected by one or more _strong_ _downstream_ dependency links, is turned on.
 
 - `effective_on` or just `on` colloquially - `effective_on` is what Puteron uses to decide whether to start or stop a task. This is `(direct_on || transitive_on) && all_weak_upstream_effective_on` (if it's not clear, the 3rd is a value that's true when all `weak` upstream dependencies have `effective_on`).
 
 If a task is "on" Puteron will try to make sure it and all of its strong dependencies are running (start it, restart it if it failed, etc). If a task is "off" (not "on") Puteron will try to make sure it's not running (stop it, force kill it if that fails) and stop any no-longer required dependencies.
 
-This also means that if a task is not directly on, and the task(s) making it `transitive_on` are turned off, then that task will also turn off.
+This also means that if a task is not directly on, and the task(s) making it `transitive_on` are turned off, then that task will also be stopped. Puteron maintains a minimal running state.
 
 You can see the tasks which are enabling `transitive_on` of a task with `puteron list-downstream --transitive-on`.
 
 ### Actual state
 
-Changes to "actual" state trigger Puteron to propagate control state - i.e. when the "actual" state of a task reaches `started` the downstream dependencies can be started, etc.
+Changes to "actual" state trigger Puteron to propagate control state - i.e. when the "actual" state of a task reaches `started` the downstream dependencies can be started according to `on`, etc.
 
-The two most significant "actual" states are `started` and `stopped`.
-
-- `stopped` - this is the initial state of all tasks.  Upstream dependencies won't stop until all of their downstreams have reached `stopped`.
+- `stopped` - this is the initial state of all tasks. Upstream dependencies won't stop until all of their downstreams have reached `stopped`.
 
 - `starting`, `stopping` - these are transitional states. `short` tasks are `starting` until the command completes, while `long` tasks are `starting` until their `started_check` passes (or immediately, if they have no started check).
 
@@ -70,11 +64,13 @@ The two most significant "actual" states are `started` and `stopped`.
 
 Build `puteron` with `cargo build` (or get it some other way).
 
-1. Write config for your tasks put them in a directory - [reference](#demon-config)
+1. Write config for your tasks and put them in a directory - [reference](#task-specification)
 
-2. Define the `puteron` config and specify the above task directory - [reference](#task-specification)
+2. Define the `puteron` config `config.json` and specify the above task directory - [reference](#demon-config)
 
 3. Run `puteron demon config.json`
+
+4. You can use `puteron` to turn tasks on or off, load new tasks, or delete existing tasks. See the command help for details.
 
 ## Nix
 
@@ -97,7 +93,7 @@ You can use it by doing
 }
 ```
 
-Each entry in `config.puteron.tasks.*` is directly translated to JSON so you must use the same format for that, including capitalization, or you can deserialize from actual JSON directly.
+Each entry in `config.puteron.tasks.*` is directly translated to JSON so you must use the same format for that, including capitalization.
 
 ## Reference
 
@@ -121,7 +117,7 @@ An example config: `config.json`
 
 (Specifying the schema is optional but will make VS Code provide autocomplete and check the config as you write it.)
 
-I kept the `XDG_RUNTIME_DIR` env var since that's used to determine the path for `puteron` IPC for running `puteron` commands in tasks (see the backup task below). This allows me to use the same config as root (home server) or as a user (local testing).
+I kept the `XDG_RUNTIME_DIR` env var since that's used to determine the path for `puteron` IPC for running `puteron` commands recursively in tasks if you happen to want to do that (see the backup task below - this allows me to use the same config as root (home server) or as a user (local testing)).
 
 ### Task specification
 
@@ -177,15 +173,31 @@ set -xeu
 rclone --config /path/to/config sync /my/data default_remote:/my-bucket/local
 ```
 
+### Task types
+
+- `long`
+
+  This is a typical daemon/service/server. You'd use it for things like Postgres or a web server that run continuously.
+
+- `short`
+
+  This is for something that runs and is expected to stop on its own. Things like backup scripts, batch jobs, etc. Short tasks can be set to run periodically on a schedule. Short tasks can turn their control state off after running, or delete themselves.
+
+- `empty`
+
+  When `on` this immediately reaches `started` state, and when off it immediately reaches `stopped` state. It does nothing else.
+
+  You can use this to group tasks (i.e. having tasks as strong upstreams, then turning on the empty will turn on all the tasks) or to proxy state from something managed externally (i.e. have an external system update the state of the empty so other tasks can respond to it, see the next section for one use case).
+
 ### Interaction with systemd
 
 There are two utilities/hacks to work with systemd:
 
 - Binary `puteron-control-systemd`
 
-  This binary attempts to manage the state of a systemd unit.  When run, it starts the systemd unit.  When killed, it stops the systemd unit.  If the systemd unit exits on its own, `puteron-control-systemd` also exits.
+  This binary attempts to manage the state of a systemd unit. When run, it starts the systemd unit. When killed, it stops the systemd unit. If the systemd unit exits on its own, `puteron-control-systemd` also exits.
 
-  You can use this to allow the puteron graph to control systemd units, by making a task that runs `puteron-control-systemd`.  When the task is started or stopped, the corresponding systemd unit will also be started or stopped.
+  You can use this to allow the puteron graph to control systemd units, by making a task that runs `puteron-control-systemd`. When the task is started or stopped, the corresponding systemd unit will also be started or stopped.
 
 - You can add `ExecStartPost` and `ExecStopPre` commands to hook `puteron on` and `puteron off` with a proxy `empty` unit, to allow systemd to control the puteron graph.
 

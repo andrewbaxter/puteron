@@ -4,17 +4,17 @@ Puteron is a process manager, like Systemd, Runit, Shepherd, etc..
 
 Here's a quick comparison to systemd:
 
-- Represents tasks (services) as a graph (like systemd)
+- Represents task (service) dependencies as a graph (like systemd)
 
 - Set your desired state and Puteron does what's required to establish exactly what you want and keep it that way. Intent and execution are separated - see `Control and actual state` below
 
 - One-directional dependencies: no "wanted by", "part of", "binds to", etc
 
-- Easy startup checks! Wait for a file to appear or a socket to open before starting downstream tasks. Unlike systemd, dbus notification isn't supported.
+- Easy startup checks! Wait for a file to appear or a socket to open before starting downstream tasks. Dbus notification isn't supported.
 
 - JSON everywhere: configs, command output, command input
 
-- Minimal dependencies on external systems (dbus, hardcoded paths, polkit, logind, etc.) so it's easy to relocate and test configs in local development environments
+- Minimal external dependencies (dbus, hardcoded paths, polkit, logind, etc.) so it's easy to run multiple instances for labs or development, or test a system config as a user
 
 - Does one thing: manage processes
 

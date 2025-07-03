@@ -72,8 +72,7 @@
           ],
           "properties": {
             "daily": {
-              "type": "string",
-              "format": "partial-date-time"
+              "$ref": "#/definitions/RuleDaily"
             }
           },
           "additionalProperties": false
@@ -115,6 +114,29 @@
           "additionalProperties": false
         }
       ]
+    },
+    "RuleDaily": {
+      "type": "object",
+      "required": [
+        "time"
+      ],
+      "properties": {
+        "time": {
+          "type": "string",
+          "format": "partial-date-time"
+        },
+        "tz": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Timezone"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
     },
     "RuleMonthly": {
       "type": "object",

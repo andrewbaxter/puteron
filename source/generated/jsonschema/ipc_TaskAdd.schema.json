@@ -147,8 +147,7 @@
           ],
           "properties": {
             "daily": {
-              "type": "string",
-              "format": "partial-date-time"
+              "$ref": "#/definitions/RuleDaily"
             }
           },
           "additionalProperties": false
@@ -190,6 +189,29 @@
           "additionalProperties": false
         }
       ]
+    },
+    "RuleDaily": {
+      "type": "object",
+      "required": [
+        "time"
+      ],
+      "properties": {
+        "time": {
+          "type": "string",
+          "format": "partial-date-time"
+        },
+        "tz": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Timezone"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
     },
     "RuleMonthly": {
       "type": "object",
@@ -452,6 +474,18 @@
                 }
               ]
             },
+            "restart_delay_max": {
+              "description": "If set, the restart delay doubles each attempt until it reaches the max. After that each retry will wait for the maximum duration since the previous.",
+              "default": null,
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Duration"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "started_check": {
               "description": "How to determine if command has started - otherwise immediately transition to started from starting.",
               "default": null,
@@ -522,6 +556,18 @@
             },
             "restart_delay": {
               "description": "How long to wait between restarts when the command exits. Defaults to 60s.",
+              "default": null,
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Duration"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "restart_delay_max": {
+              "description": "If set, the restart delay doubles each attempt until it reaches the max. After that each retry will wait for the maximum duration since the previous.",
               "default": null,
               "anyOf": [
                 {

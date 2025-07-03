@@ -22,6 +22,14 @@
         }
       ]
     },
+    "log_type": {
+      "default": "stderr",
+      "allOf": [
+        {
+          "$ref": "#/definitions/LogType"
+        }
+      ]
+    },
     "task_dirs": {
       "default": [],
       "type": "array",
@@ -58,6 +66,24 @@
         }
       },
       "additionalProperties": false
+    },
+    "LogType": {
+      "oneOf": [
+        {
+          "description": "Default, all child stdout/stderr output goes to the puteron's stderr.",
+          "type": "string",
+          "enum": [
+            "stderr"
+          ]
+        },
+        {
+          "description": "All child stdout/stderr is sent to the syslog using the task id as the syslog name.",
+          "type": "string",
+          "enum": [
+            "syslog"
+          ]
+        }
+      ]
     }
   }
 }

@@ -1,0 +1,87 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Array_of_Event",
+  "type": "array",
+  "items": {
+    "$ref": "#/definitions/Event"
+  },
+  "definitions": {
+    "Actual": {
+      "type": "string",
+      "enum": [
+        "stopped",
+        "starting",
+        "started",
+        "stopping"
+      ]
+    },
+    "Event": {
+      "type": "object",
+      "required": [
+        "event",
+        "task"
+      ],
+      "properties": {
+        "event": {
+          "$ref": "#/definitions/EventType"
+        },
+        "task": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "EventType": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "direct_on"
+          ],
+          "properties": {
+            "direct_on": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "transitive_on"
+          ],
+          "properties": {
+            "transitive_on": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "effective_on"
+          ],
+          "properties": {
+            "effective_on": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "actual"
+          ],
+          "properties": {
+            "actual": {
+              "$ref": "#/definitions/Actual"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    }
+  }
+}

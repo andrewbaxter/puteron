@@ -241,32 +241,30 @@ To even have a chance of getting mindshare, I needed to figure out what the core
 
 - A standard for packaging
 
-  Many pieces of software come with reference systemd unit definitions. This was huge for interoperability, and unfortunately this is purely a market share thing - I'm hopeful this will be surmountable if Puteron is otherwise very usable.
+  Many pieces of software come with reference systemd unit definitions, so all you need to do is build then do `systemd start X` to get it running on your system.
 
 - A standard for overrides
 
   System administrators need a standard method for customizing services and manage those overrides independent from the base system so that upgrades don't fail to update files or overwrite customizations.
 
-- Avoiding misconfiguration when there are optional dependencies
+- Specifying startup ordering/dependencies
 
-  If a service self-configures itself based on the observed environment (like, open sockets, or external processes, enumerating devices, etc) then if it's started too early it may be mis-configured. Specifying dependencies prevents such a service from starting until the environment is properly set up.
+  One issue this solves is if a service self-configures itself based on the observed environment (like, open sockets, or external processes, enumerating devices, etc), if it's started too early it may mis-configure. Specifying dependencies prevents such a service from starting until the environment is properly set up.
+
+  Not starting up services until their dependencies are up also reduces false positive errors due to mis-ordering (and hence, reduces log/notification noise).
 
 - Dealing with diverse installation environments
 
-  Depending on the system, files may be in different locations, services might not exist (or others might exist in their place). Ideally, a single definition would be able to work without changes in a variety of environments, various runtime checks, etc.
+  Depending on the distribution, files may be in different locations, services might not exist (or others might exist in their place). Ideally, a single definition would be able to work without changes in a variety of environments, various runtime checks, etc.
 
 - System mutation
 
-  For maintenance or on various external events it may be necessary to stop or start sets of services.
+  For maintenance, or when various external events occur (ex: switching to battery power, triggering infrequent workloads) it may be necessary to stop or start sets of services.
 
 - Log management
 
   All processes should be logged - a process manager should never discard output unless explicitly instructed to.
 
-- Reducing log noise
+I think Puteron has solutions for most of these, to some degree or minimal wrapper scripts. You can't do direct conversion of systemd units to Puteron tasks, but I think most services could be run in Puteron without much hassle. Being a standard relies on market share so that's out of grasp at the moment, but I'm hopeful maybe someday this will get there...
 
-  The dependency graph prevents services from starting when critical dependencies aren't on, avoiding a lot of error spam in the noise.
-
-I think Puteron has solutions for most of these, to some degree or minimal wrapper scripts. You can't do direct conversion of systemd units to Puteron tasks, but I think most services could be run in Puteron without much hassle.
-
-I believe a significant part of systemd's design and features were also there to make migration easier (like unit generators from `/etc` files and init.d scripts) and simultaneously support everything those could possibly do. This isn't a goal for Puteron.
+I think maybe a significant part of systemd's design and features were also there to make migration easier (like unit generators from `/etc` files and init.d scripts) and simultaneously support everything those could possibly do. Interop/ease of migration isn't a goal for Puteron, but in exchange I think this allows it to be a lot more comprehensible.

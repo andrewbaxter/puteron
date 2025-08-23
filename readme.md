@@ -6,15 +6,17 @@ Here's a quick comparison to systemd:
 
 - Represents task (service) dependencies as a graph (like systemd)
 
-- Set your desired state and Puteron does what's required to establish exactly what you want and keep it that way. Intent and execution are separated - see `Control and actual state` below
+- Set your desired state and Puteron does what's required to establish exactly what you want and keep it that way. Intent and execution are separated - see `Control and actual state` below. In Systemd these are not separated.
 
-- One-directional dependencies: no "wanted by", "part of", "binds to", etc
+- All dependencies are one-directional: no "wanted by", "part of", "binds to", etc
 
-- Easy startup checks! Wait for a file to appear or a socket to open before starting downstream tasks. Dbus notification isn't supported.
+- Easy startup checks! Wait for a file to appear or a socket to open before starting downstream tasks. Unlike Systemd, dbus notification isn't supported.
 
 - JSON everywhere: configs, command output, command input
 
-- Minimal external dependencies (dbus, hardcoded paths, polkit, logind, etc.) so it's easy to run multiple instances for labs or development, or test a system config as a user
+- Minimal runtime environment dependencies (no dbus, hardcoded paths, polkit, logind, etc.).
+  
+  It's easy to run multiple instances for labs or development, or test a system config as a user
 
 - Does one thing: manage processes
 

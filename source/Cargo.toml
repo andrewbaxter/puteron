@@ -35,3 +35,6 @@ structre = "0.2"
 schemars = { version = "0.8", features = ["chrono"] }
 chrono = { version = "0.4", features = ["serde"] }
 glove = "0.1"
+
+[lints.clippy]
+all = "allow"

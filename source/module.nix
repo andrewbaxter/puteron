@@ -203,7 +203,8 @@ in
             default = false;
             description = "Enable the puteron service for managing tasks (services). This will create a systemd unit to run puteron, with the task config directory in the Nix store plus an additional directory in `/etc/puteron/tasks` or `~/.config/puteron/tasks`.";
           };
-        } // options;
+        }
+        // options;
       };
     };
   };
@@ -229,28 +230,27 @@ in
           # Control tasks
           // (lib.attrsets.mapAttrs' (unit: value: {
             name = mapSystemdTaskName unit;
-            value =
-              {
-                command = {
-                  line = [
-                    "${pkg}/bin/puteron-control-systemd"
-                    unit
-                  ];
-                };
-              }
-              // (
-                if value.oneshot then
-                  {
-                    type = "short";
-                  }
-                else
-                  {
-                    type = "long";
-                    started_check = {
-                      run_path = "puteron-control-systemd-${unit}-started";
-                    };
-                  }
-              );
+            value = {
+              command = {
+                line = [
+                  "${pkg}/bin/puteron-control-systemd"
+                  unit
+                ];
+              };
+            }
+            // (
+              if value.oneshot then
+                {
+                  type = "short";
+                }
+              else
+                {
+                  type = "long";
+                  started_check = {
+                    run_path = "puteron-control-systemd-${unit}-started";
+                  };
+                }
+            );
           }) controlSystemd)
 
           #

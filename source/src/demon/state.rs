@@ -19,15 +19,17 @@ use {
     },
     loga::Log,
     slotmap::{
-        new_key_type,
         SlotMap,
+        new_key_type,
     },
     std::{
         cell::{
             Cell,
             RefCell,
         },
-        collections::HashMap,
+        collections::{
+            HashMap,
+        },
         path::PathBuf,
         sync::{
             Arc,
@@ -36,9 +38,9 @@ use {
     },
     tokio::{
         sync::{
+            Notify,
             broadcast,
             oneshot,
-            Notify,
         },
         time::Instant,
     },
@@ -83,6 +85,7 @@ pub(crate) struct TaskState_ {
     pub(crate) specific: TaskStateSpecific,
     pub(crate) started_waiters: RefCell<Vec<oneshot::Sender<bool>>>,
     pub(crate) stopped_waiters: RefCell<Vec<oneshot::Sender<bool>>>,
+    pub(crate) delete_when_stopped: Cell<bool>,
 }
 
 new_key_type!{

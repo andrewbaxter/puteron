@@ -20,7 +20,7 @@ use {
                 sync_actual_should_stop_related,
                 ExecutePlan,
             },
-            task_create_delete::delete_task,
+            task_create_delete::delete_task_immediate,
             task_util::{
                 get_short_task_started_action,
                 get_task,
@@ -366,7 +366,7 @@ fn event_started(state: &Arc<State>, task_id: &TaskId) {
                 interface::task::ShortTaskStartedAction::None => {
                     extra_action = EventStartedAction::None;
                 },
-                interface::task::ShortTaskStartedAction::TurnOff | interface::task::ShortTaskStartedAction::Delete => {
+                interface::task::ShortTaskStartedAction::TurnOff => {
                     extra_action = EventStartedAction::SetOff;
                 },
             }
@@ -427,7 +427,7 @@ fn event_stopped(state: &Arc<State>, task_id: &TaskId) {
         // Restart
         sync_actual_should_start_downstream(&state_dynamic, &mut plan, task_id, task);
     } else {
-        plan_event_stopped(&state_dynamic, &mut plan, task_id);
+        plan_event_stopped(&state_dynamic, &mut plan, task_id, task);
     }
 
     // Execute graph changes
@@ -816,6 +816,6 @@ fn execute(state: &Arc<State>, state_dynamic: &mut StateDynamic, plan: ExecutePl
         }
     }
     for task_id in plan.delete {
-        delete_task(state_dynamic, &task_id);
+        delete_task_immediate(state_dynamic, &task_id);
     }
 }

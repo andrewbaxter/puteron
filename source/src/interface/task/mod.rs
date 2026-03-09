@@ -59,6 +59,8 @@ pub struct TaskSpecEmpty {
     /// Sets default on initially when the task is created (ex: at puteron start)
     #[serde(default)]
     pub default_on: bool,
+    #[serde(default)]
+    pub delete_when_stopped: bool,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, PartialEq, Eq)]
@@ -115,6 +117,8 @@ pub struct TaskSpecLong {
     /// How long to wait before force killing the process if it fails to stop. Defaults
     /// to 30s.
     pub stop_timeout: Option<SimpleDuration>,
+    #[serde(default)]
+    pub delete_when_stopped: bool,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, PartialEq, Eq)]
@@ -126,9 +130,6 @@ pub enum ShortTaskStartedAction {
     /// Set the user-on state to `false` once the task ends. This is the default if the
     /// task is scheduled and a started action isn't specified.
     TurnOff,
-    /// Delete the task once the task ends. It will no longer show up in output and
-    /// will be considered off.
-    Delete,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, PartialEq, Eq)]
@@ -164,6 +165,8 @@ pub struct TaskSpecShort {
     /// How long to wait before force killing the process if it fails to stop. Defaults
     /// to 30s.
     pub stop_timeout: Option<SimpleDuration>,
+    #[serde(default)]
+    pub delete_when_stopped: bool,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone)]

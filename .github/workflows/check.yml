@@ -1,16 +1,16 @@
 name: Check
 on:
   push:
-    branches: ["master"]
   pull_request:
-    branches: ["master"]
 env:
   CARGO_TERM_COLOR: always
 jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v1
+      - uses: actions/checkout@v6
+        with:
+          submodules: true
       - uses: mozilla-actions/sccache-action@v0.0.9
       - run: rustup component add clippy
       - run: SCCACHE_GHA_ENABLED=true RUSTC_WRAPPER=sccache cargo clippy

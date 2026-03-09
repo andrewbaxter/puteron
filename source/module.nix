@@ -133,16 +133,6 @@ let
     debug = config.puteron.debug;
   };
 
-  tasksDir = derivation {
-    name = "puteron-root-tasks-dir";
-    system = builtins.currentSystem;
-    builder = "${pkgs.python3}/bin/python3";
-    args = [
-      ./module_gendir.py
-      (builtins.toJSON tasks)
-    ];
-  };
-
   demonConfig = pkgs.writeTextFile {
     name = "puteron-root-config";
     text = builtins.toJSON (
@@ -167,7 +157,11 @@ let
         ++ [
           {
             name = "task_dirs";
-            value = [ "${tasksDir}" ];
+            value = [ "/etc/puteron" ];
+          }
+          {
+            name = "watch";
+            value = true;
           }
         ]
 
@@ -265,6 +259,15 @@ in
 
     # Assemble root config
     system.build.puteron.script = script;
+    environment.etc.puteron.source = derivation {
+      name = "puteron-root-tasks-dir";
+      system = builtins.currentSystem;
+      builder = "${pkgs.python3}/bin/python3";
+      args = [
+        ./module_gendir.py
+        (builtins.toJSON tasks)
+      ];
+    };
     systemd.services =
       if !config.puteron.enable then
         { }

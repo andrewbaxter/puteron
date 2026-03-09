@@ -5,7 +5,9 @@ use {
         Serialize,
     },
     std::{
-        collections::HashMap,
+        collections::{
+            HashMap,
+        },
         path::PathBuf,
     },
 };
@@ -46,6 +48,14 @@ pub struct Config {
     pub environment: Environment,
     #[serde(default)]
     pub task_dirs: Vec<PathBuf>,
+    /// Synchronize tasks to the contents of the task directories.
+    ///
+    /// This means that when a task file is deleted, the task will be deleted. When a
+    /// new task file is found, a task will be created. This may miss events in WSL:
+    /// https://github.com/notify-rs/notify/issues/254 . This may miss events in large
+    /// directories: https://github.com/notify-rs/notify/issues/412 .
+    #[serde(default)]
+    pub watch: bool,
     #[serde(default)]
     pub log_type: LogType,
 }

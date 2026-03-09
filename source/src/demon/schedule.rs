@@ -1,7 +1,6 @@
 use {
     super::state::StateDynamic,
     crate::{
-        demon::state::TaskStateSpecific,
         interface::{
             self,
             base::TaskId,
@@ -121,21 +120,6 @@ pub fn calc_next_instant(
         },
     }
     return instant_now + (next - now).to_std().unwrap();
-}
-
-pub(crate) fn populate_schedule(state_dynamic: &mut StateDynamic) {
-    for (id, task) in &state_dynamic.tasks {
-        let task = &state_dynamic.task_alloc[*task];
-        if let TaskStateSpecific::Short(t) = &task.specific {
-            for rule in &t.spec.schedule {
-                state_dynamic
-                    .schedule
-                    .entry(calc_next_instant(Utc::now(), Instant::now(), rule, false))
-                    .or_default()
-                    .push(ScheduleEvent::Rule(ScheduleRule::new((id.clone(), rule.clone()))));
-            }
-        }
-    }
 }
 
 pub(crate) fn pop_schedule(state_dynamic: &mut StateDynamic) -> Option<(Instant, ScheduleEvent)> {

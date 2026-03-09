@@ -2,9 +2,9 @@ use {
     super::{
         base::TaskId,
         task::{
-            schedule,
             DependencyType,
             Task,
+            schedule,
         },
     },
     chrono::{
@@ -18,7 +18,10 @@ use {
         Serialize,
     },
     std::{
-        collections::HashMap,
+        collections::{
+            BTreeMap,
+            BTreeSet,
+        },
         env,
         path::PathBuf,
     },
@@ -61,7 +64,12 @@ pub struct RequestTaskOnOff {
 // Delete
 #[derive(Serialize, Deserialize, Clone, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub struct RequestTaskDelete(pub TaskId);
+pub struct RequestTaskDelete {
+    pub task: TaskId,
+    pub recurse: bool,
+    pub off: bool,
+    pub wait: bool,
+}
 
 // Status
 #[derive(Serialize, Deserialize, Clone, JsonSchema)]
@@ -136,6 +144,14 @@ pub struct RequestTaskWaitStopped(pub TaskId);
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct RequestTaskListUserOn;
 
+#[derive(Serialize, Deserialize, Clone, JsonSchema)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct RequestTaskListBlockingStart(pub TaskId);
+
+#[derive(Serialize, Deserialize, Clone, JsonSchema)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct RequestTaskListBlockingStop(pub TaskId);
+
 // List upstream
 #[derive(Serialize, Deserialize, Clone, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
@@ -143,15 +159,12 @@ pub struct TaskUpstreamStatus {
     pub effective_on: bool,
     pub actual: Actual,
     pub dependency_type: DependencyType,
-    pub upstream: HashMap<TaskId, TaskUpstreamStatus>,
+    pub upstream: BTreeMap<TaskId, TaskUpstreamStatus>,
 }
 
 #[derive(Serialize, Deserialize, Clone, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub struct RequestTaskListUpstream {
-    pub task: TaskId,
-    pub include_started: bool,
-}
+pub struct RequestTaskListUpstream(pub TaskId);
 
 // List downstream
 #[derive(Serialize, Deserialize, Clone, JsonSchema)]
@@ -161,16 +174,12 @@ pub struct TaskDownstreamStatus {
     pub actual: Actual,
     pub dependency_type: DependencyType,
     pub effective_dependency_type: DependencyType,
-    pub downstream: HashMap<TaskId, TaskDownstreamStatus>,
+    pub downstream: BTreeMap<TaskId, TaskDownstreamStatus>,
 }
 
 #[derive(Serialize, Deserialize, Clone, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub struct RequestTaskListDownstream {
-    pub task: TaskId,
-    pub include_weak: bool,
-    pub include_stopped: bool,
-}
+pub struct RequestTaskListDownstream(pub TaskId);
 
 // # Demon
 //
@@ -217,7 +226,7 @@ pub struct Event {
 pub struct ReqTaskWatch;
 
 reqresp!(pub ipc {
-    TaskList(RequestTaskList) => Vec < TaskId >,
+    TaskList(RequestTaskList) => BTreeSet < TaskId >,
     TaskAdd(RequestTaskAdd) =>(),
     TaskDelete(RequestTaskDelete) =>(),
     TaskGetStatus(RequestTaskGetStatus) => TaskStatus,
@@ -225,13 +234,15 @@ reqresp!(pub ipc {
     TaskOnOff(RequestTaskOnOff) =>(),
     TaskWaitRunning(RequestTaskWaitStarted) =>(),
     TaskWaitStopped(RequestTaskWaitStopped) =>(),
-    TaskListUserOn(RequestTaskListUserOn) => Vec < TaskId >,
-    TaskListUpstream(RequestTaskListUpstream) => HashMap < TaskId,
+    TaskListUserOn(RequestTaskListUserOn) => BTreeSet < TaskId >,
+    TaskListBlockingStart(RequestTaskListBlockingStart) => BTreeSet < TaskId >,
+    TaskListBlockingStop(RequestTaskListBlockingStop) => BTreeSet < TaskId >,
+    TaskListUpstream(RequestTaskListUpstream) => BTreeMap < TaskId,
     TaskUpstreamStatus >,
-    TaskListDownstream(RequestTaskListDownstream) => HashMap < TaskId,
+    TaskListDownstream(RequestTaskListDownstream) => BTreeMap < TaskId,
     TaskDownstreamStatus >,
     TaskWatch(ReqTaskWatch) => Vec < Event >,
-    DemonEnv(RequestDemonEnv) => HashMap < String,
+    DemonEnv(RequestDemonEnv) => BTreeMap < String,
     String >,
     DemonListSchedule(RequestDemonListSchedule) => Vec < RespScheduleEntry >,
     DemonSpecDirs(RequestDemonSpecDirs) => Vec < PathBuf >,

@@ -88,18 +88,22 @@ fn check<
 fn task(id: &str, actual: Actual, specific: TaskStateSpecific) -> TaskState_ {
     let direct_on;
     let awueo;
+    let delete_when_stopped;
     match &specific {
         TaskStateSpecific::Empty(s) => {
             direct_on = s.spec.default_on;
             awueo = s.spec.upstream.values().all(|t| *t == DependencyType::Strong);
+            delete_when_stopped = s.spec.delete_when_stopped;
         },
         TaskStateSpecific::Long(s) => {
             direct_on = s.spec.default_on;
             awueo = s.spec.upstream.values().all(|t| *t == DependencyType::Strong);
+            delete_when_stopped = s.spec.delete_when_stopped;
         },
         TaskStateSpecific::Short(s) => {
             direct_on = s.spec.default_on;
             awueo = s.spec.upstream.values().all(|t| *t == DependencyType::Strong);
+            delete_when_stopped = s.spec.delete_when_stopped;
         },
     }
     return TaskState_ {
@@ -115,6 +119,7 @@ fn task(id: &str, actual: Actual, specific: TaskStateSpecific) -> TaskState_ {
         specific: specific,
         started_waiters: Default::default(),
         stopped_waiters: Default::default(),
+        delete_when_stopped: Cell::new(delete_when_stopped),
     };
 }
 
@@ -131,6 +136,7 @@ fn task_empty(
         _schema: Default::default(),
         default_on: started,
         upstream: upstream.into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
+        delete_when_stopped: false,
     } }));
 }
 
@@ -172,6 +178,7 @@ fn task_short(
             restart_delay: Default::default(),
             restart_delay_max: Default::default(),
             stop_timeout: Default::default(),
+            delete_when_stopped: false,
         },
     }));
 }
@@ -212,6 +219,7 @@ fn task_long(
             restart_delay: Default::default(),
             restart_delay_max: Default::default(),
             stop_timeout: Default::default(),
+            delete_when_stopped: false,
         },
     }));
 }
@@ -471,8 +479,9 @@ fn stopped_weak_downstream() {
     let b = get_task(&state_dynamic, &"b".to_string());
     assert!(!b.awueo.get());
     let mut plan = ExecutePlan::default();
-    get_task(&state_dynamic, &"b".to_string()).actual.set((Actual::Stopped, DateTime::UNIX_EPOCH));
-    plan_event_stopped(&state_dynamic, &mut plan, &"b".to_string());
+    let task = get_task(&state_dynamic, &"b".to_string());
+    task.actual.set((Actual::Stopped, DateTime::UNIX_EPOCH));
+    plan_event_stopped(&state_dynamic, &mut plan, &"b".to_string(), b);
     check(&state_dynamic, plan, [], ["a"], [], ["b"]);
 }
 
@@ -505,10 +514,9 @@ fn test_zigzag_stop_weak_downstream() {
 
     // Now `c` stops.
     {
-        let c = get_task(&state_dynamic, &"c".to_string());
         c.actual.set((Actual::Stopped, DateTime::UNIX_EPOCH));
         let mut plan = ExecutePlan::default();
-        plan_event_stopped(&state_dynamic, &mut plan, &"c".to_string());
+        plan_event_stopped(&state_dynamic, &mut plan, &c.id, c);
         check(&state_dynamic, plan, [], ["a"], [], ["b", "c"]);
     }
 }

@@ -1,14 +1,13 @@
 use {
     aargvark::{
-        traits_impls::AargvarkJson,
         Aargvark,
+        traits_impls::AargvarkJson,
     },
-    flowcontrol::ta_return,
     loga::{
-        ea,
-        fatal,
         Log,
         ResultContext,
+        ea,
+        fatal,
     },
     puteron::{
         demon::{
@@ -28,6 +27,8 @@ use {
                 RequestTaskGetSpec,
                 RequestTaskGetStatus,
                 RequestTaskList,
+                RequestTaskListBlockingStart,
+                RequestTaskListBlockingStop,
                 RequestTaskListDownstream,
                 RequestTaskListUpstream,
                 RequestTaskListUserOn,
@@ -43,11 +44,10 @@ use {
         spec::merge_specs,
     },
     serde::Serialize,
-    std::collections::HashMap,
-    tokio::{
-        io::AsyncWriteExt,
-        runtime,
+    std::collections::{
+        BTreeMap,
     },
+    tokio::io::AsyncWriteExt,
 };
 
 #[derive(Aargvark)]
@@ -60,29 +60,16 @@ pub struct LoadArgs {
     unique: Option<()>,
 }
 
-/// List upstream dependencies of a task. By default, this only shows strong,
-/// non-started dependencies (those that prevent the target task from starting).
 #[derive(Aargvark)]
-pub struct ListUpstreamArgs {
-    /// List upstreams of this task
+pub struct DeleteArgs {
+    /// ID of task to delete.
     task: TaskId,
-    include_started: Option<()>,
-    /// Shorthand for all `include-` options.
-    #[vark(flag = "--all", flag = "-a")]
-    all: Option<()>,
-}
-
-/// List downstream dependencies of a task. By default, this only shows strong,
-/// non-stopped dependencies (those that prevent the target task from stopping).
-#[derive(Aargvark)]
-pub struct ListDownstreamArgs {
-    /// List downstreams of this task
-    task: TaskId,
-    include_weak: Option<()>,
-    include_stopped: Option<()>,
-    /// Shorthand for all `include-` options.
-    #[vark(flag = "--all", flag = "-a")]
-    all: Option<()>,
+    /// Mark all downstream dependencies for deletion.
+    recurse: Option<()>,
+    /// Set the task to off (as well as any dependencies, if recursive).
+    off: Option<()>,
+    /// Wait for task to be deleted before exiting.
+    wait: Option<()>,
 }
 
 #[derive(Aargvark)]
@@ -97,10 +84,6 @@ enum ArgCommand {
     /// Show the merged spec for a task from the demon task configuration directories,
     /// as it would be loaded.
     PreviewStored(TaskId),
-    /// Stop and unload a task.
-    ///
-    /// No error if the task is already deleted.
-    Delete(TaskId),
     /// Get various runtime info about a task.
     Status(TaskId),
     /// Get the merged loaded spec for a task.
@@ -113,6 +96,12 @@ enum ArgCommand {
     ///
     /// No error if the task is already off.
     Off(TaskId),
+    /// Mark a task to be deleted when stopped.
+    ///
+    /// This action is uncancellable, but you can re-add the task afterwards. This
+    /// requires all downstream tasks to also be marked for deletion. No error if the
+    /// task is already marked for deletion.
+    Delete(DeleteArgs),
     /// Wait for a task to start.
     ///
     /// Exits immediately if the task has already started. Exits with an error if the
@@ -125,10 +114,14 @@ enum ArgCommand {
     WaitUntilStopped(TaskId),
     /// List tasks that are user-on.
     ListUserOn,
+    /// List leaf tasks (upstream) that are blocking the current task from starting.
+    ListBlockingStart(TaskId),
+    /// List leaf tasks (downstream) that are blocking the current task from stopping.
+    ListBlockingStop(TaskId),
     /// List tasks upstream of a task, plus their control and current states.
-    ListUpstream(ListUpstreamArgs),
+    ListUpstream(TaskId),
     /// List tasks downstream of a task, plus their control and current states.
-    ListDownstream(ListDownstreamArgs),
+    ListDownstream(TaskId),
     /// Writes a line of JSON to stdout every time a task's control or actual state
     /// changes.
     Watch,
@@ -168,7 +161,7 @@ async fn main() {
                     actual: Actual,
                 }
 
-                let mut out = HashMap::new();
+                let mut out = BTreeMap::new();
                 for task in tasks {
                     let status = client.send_req(RequestTaskGetStatus(task.clone())).await.map_err(loga::err)?;
                     out.insert(task, Entry {
@@ -207,8 +200,13 @@ async fn main() {
                         .context_with("Found no specs for task", ea!(task = task_id))?;
                 println!("{}", serde_json::to_string_pretty(&spec).unwrap());
             },
-            ArgCommand::Delete(task_id) => {
-                client_req(RequestTaskDelete(task_id)).await?;
+            ArgCommand::Delete(args) => {
+                client_req(RequestTaskDelete {
+                    task: args.task,
+                    recurse: args.recurse.is_some(),
+                    off: args.off.is_some(),
+                    wait: args.wait.is_some(),
+                }).await?;
             },
             ArgCommand::Status(task_id) => {
                 let status = client_req(RequestTaskGetStatus(task_id)).await?;
@@ -239,18 +237,29 @@ async fn main() {
             ArgCommand::ListUserOn => {
                 println!("{}", serde_json::to_string_pretty(&client_req(RequestTaskListUserOn).await?).unwrap());
             },
-            ArgCommand::ListUpstream(args) => {
-                println!("{}", serde_json::to_string_pretty(&client_req(RequestTaskListUpstream {
-                    task: args.task,
-                    include_started: args.include_started.is_some() || args.all.is_some(),
-                }).await?).unwrap());
+            ArgCommand::ListBlockingStart(task_id) => {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&client_req(RequestTaskListBlockingStart(task_id)).await?).unwrap()
+                );
             },
-            ArgCommand::ListDownstream(args) => {
-                println!("{}", serde_json::to_string_pretty(&client_req(RequestTaskListDownstream {
-                    task: args.task,
-                    include_stopped: args.include_stopped.is_some() || args.all.is_some(),
-                    include_weak: args.include_weak.is_some() || args.all.is_some(),
-                }).await?).unwrap());
+            ArgCommand::ListBlockingStop(task_id) => {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&client_req(RequestTaskListBlockingStop(task_id)).await?).unwrap()
+                );
+            },
+            ArgCommand::ListUpstream(task_id) => {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&client_req(RequestTaskListUpstream(task_id)).await?).unwrap()
+                );
+            },
+            ArgCommand::ListDownstream(task_id) => {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&client_req(RequestTaskListDownstream(task_id)).await?).unwrap()
+                );
             },
             ArgCommand::Watch => {
                 let mut stdout = tokio::io::stdout();
@@ -263,30 +272,12 @@ async fn main() {
                 }
             },
             ArgCommand::Env => {
-                let rt =
-                    runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()
-                        .context("Error starting async runtime")?;
-                return rt.block_on(async move {
-                    ta_return!((), loga::Error);
-                    let status = client_req(RequestDemonEnv).await?;
-                    println!("{}", serde_json::to_string_pretty(&status).unwrap());
-                    return Ok(());
-                });
+                let status = client_req(RequestDemonEnv).await?;
+                println!("{}", serde_json::to_string_pretty(&status).unwrap());
             },
             ArgCommand::ListSchedule => {
-                let rt =
-                    runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()
-                        .context("Error starting async runtime")?;
-                return rt.block_on(async move {
-                    ta_return!((), loga::Error);
-                    let status = client_req(RequestDemonEnv).await?;
-                    println!("{}", serde_json::to_string_pretty(&status).unwrap());
-                    return Ok(());
-                });
+                let status = client_req(RequestDemonEnv).await?;
+                println!("{}", serde_json::to_string_pretty(&status).unwrap());
             },
             ArgCommand::Demon(args) => {
                 demon::main(debug, &log, args).await?;

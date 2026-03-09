@@ -25,7 +25,6 @@ use {
                 walk_task_upstream,
             },
         },
-        interface::task::ShortTaskStartedAction,
     },
     std::collections::HashSet,
 };
@@ -63,8 +62,16 @@ pub(crate) fn plan_event_stopping(state_dynamic: &StateDynamic, plan: &mut Execu
 }
 
 /// After state change
-pub(crate) fn plan_event_stopped(state_dynamic: &StateDynamic, plan: &mut ExecutePlan, task_id: &TaskId) {
+pub(crate) fn plan_event_stopped(
+    state_dynamic: &StateDynamic,
+    plan: &mut ExecutePlan,
+    task_id: &TaskId,
+    task: &TaskState_,
+) {
     sync_actual_should_stop_related(state_dynamic, plan, task_id);
+    if task.delete_when_stopped.get() {
+        plan.delete.insert(task_id.clone());
+    }
 }
 
 /// Return true if started - downstream can be started now.
@@ -126,17 +133,20 @@ fn plan_actual_stop_one(state_dynamic: &StateDynamic, plan: &mut ExecutePlan, ta
             actual_set(state_dynamic, task, Actual::Stopping);
             plan.log_stopped.insert(task.id.clone());
             actual_set(state_dynamic, task, Actual::Stopped);
+            if task.delete_when_stopped.get() {
+                plan.delete.insert(task.id.clone());
+            }
         },
         TaskStateSpecific::Long(_) => {
             plan.stop.insert(task.id.clone());
         },
-        TaskStateSpecific::Short(specific) => {
+        TaskStateSpecific::Short(_specific) => {
             if task.actual.get().0 == Actual::Started {
                 plan.log_stopping.insert(task.id.clone());
                 actual_set(state_dynamic, task, Actual::Stopping);
                 plan.log_stopped.insert(task.id.clone());
                 actual_set(state_dynamic, task, Actual::Stopped);
-                if let Some(ShortTaskStartedAction::Delete) = specific.spec.started_action {
+                if task.delete_when_stopped.get() {
                     plan.delete.insert(task.id.clone());
                 }
             } else {

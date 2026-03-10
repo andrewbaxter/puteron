@@ -43,6 +43,7 @@ use {
         spec::{
             list_task_dir_tasks,
             merge_specs,
+            order_specs,
         },
     },
     aargvark::{
@@ -79,7 +80,6 @@ use {
     },
     std::{
         collections::{
-            BTreeMap,
             BTreeSet,
             HashMap,
             HashSet,

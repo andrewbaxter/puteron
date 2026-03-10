@@ -12,6 +12,11 @@ use {
             delete_task_recursive_off,
             start_and_schedule_new_tasks,
         },
+        errors::{
+            ErrorHandler,
+            LogErrorHandler,
+            ReturnErrorHandler,
+        },
         interface::{
             self,
             base::TaskId,
@@ -47,6 +52,7 @@ use {
     chrono::Utc,
     flowcontrol::{
         shed,
+        superif,
         ta_return,
     },
     loga::{
@@ -62,6 +68,10 @@ use {
         ScheduleEvent,
         pop_schedule,
     },
+    sha2::{
+        Digest,
+        Sha256,
+    },
     state::{
         State,
         StateDynamic,
@@ -69,11 +79,13 @@ use {
     },
     std::{
         collections::{
+            BTreeMap,
             BTreeSet,
             HashMap,
             HashSet,
         },
         env,
+        path::PathBuf,
         sync::{
             Arc,
             Mutex,
@@ -116,95 +128,33 @@ use {
 #[derive(Aargvark)]
 pub struct DemonRunArgs {
     config: AargvarkJson<Config>,
-    /// Validate that the config can be parsed and is valid per early checks (no
-    /// dependency cycles, etc) and exit, don't run anything.
-    validate: Option<()>,
 }
 
 fn watcher_timeout() -> Duration {
     return Duration::from_secs(10);
 }
 
-async fn load_task_dirs_missing_noschedule(log: &Log, state: &State) -> (HashSet<TaskId>, Option<loga::Error>) {
+async fn load_task_dirs_missing_noschedule(
+    state: &State,
+    errors: &mut dyn ErrorHandler,
+) -> (HashSet<TaskId>, HashMap<TaskId, HashMap<PathBuf, Vec<u8>>>) {
     let mut new_tasks = HashSet::new();
-    let mut new_specs = match merge_specs(log, &state.task_dirs, None).await {
-        Ok(v) => v,
-        Err(e) => return (new_tasks, Some(e)),
-    };
+    let mut fs_tasks = list_task_dir_tasks(&state.task_dirs, errors).await;
+    let existing_task_specs;
+    {
+        let state_dynamic = state.dynamic.lock().unwrap();
+        fs_tasks.retain(|k, _| !state_dynamic.tasks.contains_key(k));
+        existing_task_specs = state_dynamic.tasks.keys().cloned().collect();
+    }
+    let new_specs = merge_specs(fs_tasks, errors).await;
+    let (new_specs, new_hashes) = order_specs(existing_task_specs, errors, new_specs);
     let mut state_dynamic = state.dynamic.lock().unwrap();
-    new_specs.retain(|k, _| !state_dynamic.tasks.contains_key(k));
-    let mut errors = vec![];
-    let mut missing_upstreams = HashSet::new();
-    while !new_specs.is_empty() {
-        let mut did_work = false;
-        let task_ids = new_specs.keys().cloned().collect::<Vec<_>>();
-        for task_id in &task_ids {
-            // Find frontier tasks (all upstreams created)
-            let upstream: Vec<&String> = match &new_specs.get(task_id).unwrap() {
-                Task::Empty(s) => {
-                    s.upstream.keys().collect()
-                },
-                Task::Long(s) => {
-                    s.upstream.keys().collect()
-                },
-                Task::Short(s) => {
-                    s.upstream.keys().collect()
-                },
-            };
-            let mut all_upstream_created = true;
-            for upstream_id in upstream {
-                if state_dynamic.tasks.contains_key(upstream_id) {
-                    // created, ok
-                } else if new_specs.contains_key(upstream_id) {
-                    // not yet created
-                    all_upstream_created = false;
-                } else {
-                    // missing, pretend ok - missing will be logged later when validating
-                    all_upstream_created = false;
-                    missing_upstreams.insert((task_id.clone(), upstream_id.clone()));
-                }
-            }
-            if !all_upstream_created {
-                continue;
-            }
-
-            // All deps created, now create this task
-            did_work = true;
-            let spec = new_specs.remove(task_id).unwrap();
-            validate_new_task(&state_dynamic, &mut errors, task_id, &spec);
-            build_task_noschedule(&mut state_dynamic, task_id.clone(), spec);
-            new_tasks.insert(task_id.clone());
-        }
-        if !did_work {
-            if !missing_upstreams.is_empty() {
-                errors.push(
-                    loga::err_with(
-                        "One or more tasks have invalid upsterams",
-                        ea!(
-                            missing =
-                                missing_upstreams
-                                    .iter()
-                                    .map(|(k, v)| format!("upstream [{}] (from [{}])", v, k))
-                                    .collect::<Vec<_>>()
-                                    .join(", ")
-                        ),
-                    ),
-                );
-            } else {
-                errors.push(
-                    loga::err_with(
-                        "One or more tasks have cycles in their dependencies or invalid upstreams",
-                        ea!(tasks = task_ids.dbg_str()),
-                    ),
-                );
-            }
-            break;
-        }
+    for (task_id, spec) in new_specs {
+        new_tasks.insert(task_id.clone());
+        validate_new_task(&state_dynamic, errors, &task_id, &spec);
+        build_task_noschedule(&mut state_dynamic, task_id.clone(), spec, false);
     }
-    if !errors.is_empty() {
-        return (new_tasks, Some(loga::agg_err("One or more errors with task specifications", errors)));
-    }
-    return (new_tasks, None);
+    return (new_tasks, new_hashes);
 }
 
 pub async fn main(debug: bool, log: &Log, args: DemonRunArgs) -> Result<(), loga::Error> {
@@ -242,39 +192,71 @@ pub async fn main(debug: bool, log: &Log, args: DemonRunArgs) -> Result<(), loga
 
     // # Setup tasks
     let tasks_sync_load = Arc::new(Notify::new());
+    let loaded_hashes: Arc<Mutex<HashMap<TaskId, HashMap<PathBuf, Vec<u8>>>>> = Default::default();
     let mut _watcher = None;
-    if config.watch && !args.validate.is_some() {
+    if config.watch {
         let tasks_sync_delete: Arc<dyn Send + Sync + Fn() -> ()> = Arc::new({
             let bg = Arc::new(Mutex::new(None));
             let state = state.clone();
             let tasks_sync_load = tasks_sync_load.clone();
+            let loaded_hashes = loaded_hashes.clone();
             move || {
                 let ct = CancellationToken::new();
                 *bg.lock().unwrap() = Some(ct.clone().drop_guard());
                 let state = state.clone();
                 let tasks_sync_load = tasks_sync_load.clone();
+                let loaded_hashes = loaded_hashes.clone();
                 spawn(async move {
                     let work = async {
                         sleep(Duration::from_secs(1)).await;
-                        let tasks = match list_task_dir_tasks(&state.log, &state.task_dirs).await {
-                            Ok(t) => t,
-                            Err(e) => {
-                                state
-                                    .log
-                                    .log(
-                                        loga::WARN,
-                                        e.context("Error listing tasks in task directories at directory change"),
-                                    );
-                                return;
-                            },
-                        };
+                        let mut errors = LogErrorHandler { log: state.log.clone() };
+                        let fs_tasks = list_task_dir_tasks(&state.task_dirs, &mut errors).await;
                         let mut remove_tasks = HashSet::new();
                         {
                             let mut state_dynamic = state.dynamic.lock().unwrap();
-                            for task in state_dynamic.tasks.keys() {
-                                if !tasks.contains_key(task) {
-                                    remove_tasks.insert(task.clone());
+                            for (task_id, task) in &state_dynamic.tasks {
+                                let task = &state_dynamic.task_alloc[*task];
+                                if task.cli_created {
+                                    continue;
                                 }
+                                superif!({
+                                    let Some(paths) = fs_tasks.get(task_id) else {
+                                        break 'remove;
+                                    };
+                                    for path in paths {
+                                        let bytes =
+                                            match std::fs::read(
+                                                &path,
+                                            ).context_with(
+                                                "Error reading json from task directory",
+                                                ea!(path = path.to_string_lossy())
+                                            ) {
+                                                Ok(v) => v,
+                                                Err(_) => {
+                                                    break 'remove;
+                                                },
+                                            };
+                                        let fs_hash = Sha256::digest(&bytes).to_vec();
+                                        match loaded_hashes
+                                            .lock()
+                                            .unwrap()
+                                            .get(task_id)
+                                            .and_then(|m| m.get(path))
+                                            .cloned() {
+                                            Some(loaded_hash) => {
+                                                if loaded_hash != fs_hash {
+                                                    break 'remove;
+                                                }
+                                            },
+                                            None => {
+                                                break 'remove;
+                                            },
+                                        }
+                                    }
+                                } 'remove {
+                                    loaded_hashes.lock().unwrap().remove(task_id);
+                                    remove_tasks.insert(task_id.clone());
+                                });
                             }
                             for task in &remove_tasks {
                                 state
@@ -397,17 +379,10 @@ pub async fn main(debug: bool, log: &Log, args: DemonRunArgs) -> Result<(), loga
         _watcher = Some((root_parent_watcher, root_watcher));
         tasks_sync_load.notify_one();
     } else {
-        let (new_tasks, error) = load_task_dirs_missing_noschedule(log, &state).await;
-        if let Some(error) = error {
-            log.log_err(loga::WARN, error.context("Errors encountered while loading new tasks"));
-        }
-        {
-            let mut state_dynamic = state.dynamic.lock().unwrap();
-            start_and_schedule_new_tasks(&state, &mut *state_dynamic, new_tasks);
-        }
-        if args.validate.is_some() {
-            return Ok(());
-        }
+        let mut errors = LogErrorHandler { log: state.log.clone() };
+        let (new_tasks, _) = load_task_dirs_missing_noschedule(&state, &mut errors).await;
+        let mut state_dynamic = state.dynamic.lock().unwrap();
+        start_and_schedule_new_tasks(&state, &mut *state_dynamic, new_tasks);
     }
 
     // ## Handle ipc + other inputs (signals)
@@ -445,10 +420,9 @@ pub async fn main(debug: bool, log: &Log, args: DemonRunArgs) -> Result<(), loga
                 // # Task dir watch events
                 _ = tasks_sync_load.notified() => {
                     state.log.log(loga::DEBUG, "Stale tasks deleted, re-launching them from disk");
-                    let (new_tasks, error) = load_task_dirs_missing_noschedule(log, &state).await;
-                    if let Some(error) = error {
-                        log.log_err(loga::WARN, error.context("Errors encountered while loading new tasks"));
-                    }
+                    let mut errors = LogErrorHandler { log: state.log.clone() };
+                    let (new_tasks, hashes) = load_task_dirs_missing_noschedule(&state, &mut errors).await;
+                    loaded_hashes.lock().unwrap().extend(hashes);
                     {
                         let mut state_dynamic = state.dynamic.lock().unwrap();
                         start_and_schedule_new_tasks(&state, &mut *state_dynamic, new_tasks);
@@ -662,13 +636,18 @@ async fn handle_ipc(state: Arc<State>, mut conn: ipc::ServerConn) {
                         // # Check new task spec
                         //
                         // Check for broken upstreams
-                        let mut errors = vec![];
+                        let mut errors = ReturnErrorHandler { errors: Default::default() };
                         validate_new_task(&state_dynamic, &mut errors, &m.task, &m.spec);
-                        if !errors.is_empty() {
+                        if !errors.errors.is_empty() {
                             return Err(
                                 format!(
                                     "Task has errors:\n{}",
-                                    errors.into_iter().map(|x| format!("- {}", x)).collect::<Vec<_>>().join("\n")
+                                    errors
+                                        .errors
+                                        .into_iter()
+                                        .map(|x| format!("- {}", x))
+                                        .collect::<Vec<_>>()
+                                        .join("\n")
                                 ),
                             );
                         }
@@ -679,7 +658,7 @@ async fn handle_ipc(state: Arc<State>, mut conn: ipc::ServerConn) {
                             Task::Long(s) => s.default_on,
                             Task::Short(s) => s.default_on,
                         };
-                        build_task_noschedule(&mut state_dynamic, m.task.clone(), m.spec);
+                        build_task_noschedule(&mut state_dynamic, m.task.clone(), m.spec, true);
                         start_and_schedule_new_tasks(
                             &state,
                             &mut state_dynamic,

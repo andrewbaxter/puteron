@@ -76,9 +76,11 @@ pub(crate) enum TaskStateSpecific {
 
 pub(crate) struct TaskState_ {
     pub(crate) id: TaskId,
+    /// Exclude from deletion when synchronizing (watch mode)
+    pub(crate) cli_created: bool,
     pub(crate) direct_on: Cell<(bool, DateTime<Utc>)>,
     pub(crate) transitive_on: Cell<(bool, DateTime<Utc>)>,
-    // "all weak upstream effective on"
+    /// "all weak upstream effective on"
     pub(crate) awueo: Cell<bool>,
     pub(crate) actual: Cell<(Actual, DateTime<Utc>)>,
     pub(crate) downstream: RefCell<HashMap<TaskId, DependencyType>>,

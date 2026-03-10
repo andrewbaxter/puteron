@@ -37,6 +37,7 @@ chrono = { version = "0.4", features = ["serde"] }
 glove = "0.1"
 notify = "8.2.0"
 path-absolutize = "3.1.1"
+sha2 = "0.10.9"
 
 [lints.clippy]
 all = "allow"

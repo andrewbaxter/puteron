@@ -28,6 +28,7 @@ use {
                 set_task_direct_on,
             },
         },
+        errors::ErrorHandler,
         interface::{
             self,
             base::TaskId,
@@ -53,7 +54,7 @@ use {
 
 pub(crate) fn validate_new_task(
     state_dynamic: &StateDynamic,
-    errors: &mut Vec<loga::Error>,
+    errors: &mut dyn ErrorHandler,
     task_id: &TaskId,
     task: &interface::task::Task,
 ) {
@@ -70,7 +71,7 @@ pub(crate) fn validate_new_task(
     };
     for upstream_id in upstream {
         let Some(upstream_task) = maybe_get_task(&state_dynamic, &upstream_id) else {
-            errors.push(loga::err(format!("Task [{}] has missing upstream [{}]", task_id, upstream_id)));
+            errors.handle(loga::err(format!("Task [{}] has missing upstream [{}]", task_id, upstream_id)));
             continue;
         };
         match &upstream_task.specific {
@@ -81,7 +82,7 @@ pub(crate) fn validate_new_task(
                     match started_action {
                         interface::task::ShortTaskStartedAction::None => { },
                         interface::task::ShortTaskStartedAction::TurnOff => {
-                            errors.push(
+                            errors.handle(
                                 loga::err(
                                     format!(
                                         "Task [{}] upstream [{}] has started action turn_off so this task will never be able to start",
@@ -98,9 +99,11 @@ pub(crate) fn validate_new_task(
     }
 }
 
-pub(crate) fn start_and_schedule_new_tasks(state: &Arc<State>, 
-state_dynamic: &mut StateDynamic, 
-    new_tasks: HashSet<TaskId>) {
+pub(crate) fn start_and_schedule_new_tasks(
+    state: &Arc<State>,
+    state_dynamic: &mut StateDynamic,
+    new_tasks: HashSet<TaskId>,
+) {
     // ## Start default-on tasks
     for id in &new_tasks {
         let task = state_dynamic.tasks[id];
@@ -149,7 +152,7 @@ state_dynamic: &mut StateDynamic,
     }
 }
 
-pub(crate) fn build_task_noschedule(state_dynamic: &mut StateDynamic, task_id: TaskId, spec: Task) {
+pub(crate) fn build_task_noschedule(state_dynamic: &mut StateDynamic, task_id: TaskId, spec: Task, cli_created: bool) {
     let specific;
     let delete_when_stopped;
     match spec {
@@ -196,6 +199,7 @@ pub(crate) fn build_task_noschedule(state_dynamic: &mut StateDynamic, task_id: T
     }
     let task = state_dynamic.task_alloc.insert(TaskState_ {
         id: task_id.clone(),
+        cli_created: cli_created,
         direct_on: Cell::new((false, Utc::now())),
         transitive_on: Cell::new((false, Utc::now())),
         awueo: Cell::new({

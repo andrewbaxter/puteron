@@ -169,7 +169,7 @@ let
       ))
     );
     checkPhase = ''
-      ${config.system.build.puteron.pkg}/bin/puteron demon $out --validate
+      ${config.system.build.puteron.pkg}/bin/puteron validate-config $out
     '';
   };
 
@@ -266,6 +266,7 @@ in
       args = [
         ./module_gendir.py
         (builtins.toJSON tasks)
+        ${pkg}/bin/puteron
       ];
     };
     systemd.services =

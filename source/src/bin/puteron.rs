@@ -14,9 +14,13 @@ use {
             self,
             DemonRunArgs,
         },
+        errors::{
+            ErrorHandler,
+            ReturnErrorHandler,
+        },
         interface::{
-            self,
             base::TaskId,
+            demon::Config,
             ipc::{
                 Actual,
                 ReqTaskWatch,
@@ -36,16 +40,28 @@ use {
                 RequestTaskWaitStarted,
                 RequestTaskWaitStopped,
             },
+            task::{
+                ShortTaskStartedAction,
+                Task,
+            },
         },
         ipc_util::{
             client,
             client_req,
         },
-        spec::merge_specs,
+        spec::{
+            list_task_dir_tasks,
+            merge_specs,
+            order_specs,
+        },
     },
     serde::Serialize,
-    std::collections::{
-        BTreeMap,
+    std::{
+        collections::{
+            BTreeMap,
+            HashMap,
+        },
+        path::PathBuf,
     },
     tokio::io::AsyncWriteExt,
 };
@@ -55,7 +71,7 @@ pub struct LoadArgs {
     /// ID to assign new task.
     task: TaskId,
     /// JSON task specification.
-    spec: AargvarkJson<interface::task::Task>,
+    spec: AargvarkJson<Task>,
     /// Error if a task with the specification already exists.
     unique: Option<()>,
 }
@@ -78,9 +94,6 @@ enum ArgCommand {
     Overview,
     /// Load or replace a task from a single config specified via arguments.
     Load(LoadArgs),
-    /// Load or replace a task with the specified id from the demon task configuration
-    /// directories.
-    LoadStored(TaskId),
     /// Show the merged spec for a task from the demon task configuration directories,
     /// as it would be loaded.
     PreviewStored(TaskId),
@@ -130,6 +143,14 @@ enum ArgCommand {
     /// List the current schedule. This includes the next time of all scheduled tasks.
     /// The schedule is in ascending scheduled activation time.
     ListSchedule,
+    /// Validate that the config can be parsed and is valid per early checks.
+    ValidateConfig {
+        _unused: AargvarkJson<Config>,
+    },
+    /// Validate that the task configs can be parsed and are valid per early checks (no
+    /// dependency cycles, etc) and exit, don't run anything. Takes the list of task
+    /// directories to merve and validate.
+    ValidateTaskConfigs(Vec<PathBuf>),
     /// Run the demon in the foreground.
     Demon(DemonRunArgs),
 }
@@ -178,26 +199,19 @@ async fn main() {
                     unique: args.unique.is_some(),
                 }).await?;
             },
-            ArgCommand::LoadStored(task_id) => {
-                let dirs = client_req(RequestDemonSpecDirs {}).await?;
-                let spec =
-                    merge_specs(&log, &dirs, Some(&task_id))
-                        .await?
-                        .remove(&task_id)
-                        .context_with("Found no specs for task", ea!(task = task_id))?;
-                client_req(RequestTaskAdd {
-                    task: task_id,
-                    spec,
-                    unique: false,
-                }).await?;
-            },
             ArgCommand::PreviewStored(task_id) => {
                 let dirs = client_req(RequestDemonSpecDirs {}).await?;
+                let mut errors = ReturnErrorHandler { errors: Default::default() };
+                let mut fs_tasks = list_task_dir_tasks(&dirs, &mut errors).await;
+                fs_tasks.retain(|k, _v| *k == task_id);
                 let spec =
-                    merge_specs(&log, &dirs, Some(&task_id))
-                        .await?
+                    merge_specs(fs_tasks, &mut errors)
+                        .await
                         .remove(&task_id)
                         .context_with("Found no specs for task", ea!(task = task_id))?;
+                if !errors.errors.is_empty() {
+                    return Err(loga::agg_err("Errors occurred while assembling task data", errors.errors));
+                }
                 println!("{}", serde_json::to_string_pretty(&spec).unwrap());
             },
             ArgCommand::Delete(args) => {
@@ -278,6 +292,58 @@ async fn main() {
             ArgCommand::ListSchedule => {
                 let status = client_req(RequestDemonEnv).await?;
                 println!("{}", serde_json::to_string_pretty(&status).unwrap());
+            },
+            ArgCommand::ValidateConfig { .. } => {
+                // nop, already checked by aargvark
+            },
+            ArgCommand::ValidateTaskConfigs(dirs) => {
+                let mut errors = ReturnErrorHandler { errors: Default::default() };
+                let fs_tasks = list_task_dir_tasks(&dirs, &mut errors).await;
+                let new_specs = merge_specs(fs_tasks, &mut errors).await;
+                let new_specs =
+                    order_specs(Default::default(), &mut errors, new_specs.clone())
+                        .0
+                        .into_iter()
+                        .collect::<HashMap<_, _>>();
+                for (k, v) in &new_specs {
+                    for (upstream_k, _) in match v {
+                        Task::Empty(s) => &s.upstream,
+                        Task::Long(s) => &s.upstream,
+                        Task::Short(s) => &s.upstream,
+                    } {
+                        match new_specs.get(upstream_k).unwrap() {
+                            Task::Empty(_us) => { },
+                            Task::Long(_us) => { },
+                            Task::Short(us) => {
+                                match us.started_action {
+                                    Some(ShortTaskStartedAction::TurnOff) => {
+                                        errors.handle(
+                                            loga::err(
+                                                &format!(
+                                                    "Task [{}] has upstream [{}] with started action turn-off so [{}] will never be able to start",
+                                                    k,
+                                                    upstream_k,
+                                                    k
+                                                ),
+                                            ),
+                                        );
+                                    },
+                                    Some(ShortTaskStartedAction::None) => { },
+                                    None => { },
+                                }
+                            },
+                        }
+                    }
+                }
+
+                // TODO do additional validation... cycle detection, missing upstreams, bad
+                // upstream parameters (started_action off). These currently exist but depend on
+                // the state so it'd have to be abstracted somehow.
+                if !errors.errors.is_empty() {
+                    return Err(
+                        loga::agg_err("One or more errors occurred while checking task configs", errors.errors),
+                    );
+                }
             },
             ArgCommand::Demon(args) => {
                 demon::main(debug, &log, args).await?;

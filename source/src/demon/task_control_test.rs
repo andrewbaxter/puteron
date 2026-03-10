@@ -108,6 +108,7 @@ fn task(id: &str, actual: Actual, specific: TaskStateSpecific) -> TaskState_ {
     }
     return TaskState_ {
         id: id.to_string(),
+        cli_created: true,
         direct_on: Cell::new((direct_on, DateTime::UNIX_EPOCH)),
         // placeholder, calculated later
         transitive_on: Cell::new((false, DateTime::UNIX_EPOCH)),

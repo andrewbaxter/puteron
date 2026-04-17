@@ -56,7 +56,7 @@ pub struct TaskSpecEmpty {
     /// any dependency moves out of the started state this task will stop.
     #[serde(default)]
     pub upstream: HashMap<String, DependencyType>,
-    /// Sets default on initially when the task is created (ex: at puteron start)
+    /// Sets default on initially when the task is created (ex: at puteron start).
     #[serde(default)]
     pub default_on: bool,
     #[serde(default)]
@@ -141,7 +141,8 @@ pub struct TaskSpecShort {
     /// any dependency moves out of the started state this task will stop.
     #[serde(default)]
     pub upstream: HashMap<String, DependencyType>,
-    /// Turn the task on as soon as it is loaded
+    /// Turn the task on as soon as it is loaded. If you have a schedule, you probably
+    /// want this off (it will be turned on by the schedule at the appropriate time).
     #[serde(default)]
     pub default_on: bool,
     /// Turn the task on on a schedule

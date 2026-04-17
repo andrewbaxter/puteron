@@ -133,7 +133,9 @@ pub async fn merge_specs(
                 },
             }
         }
-        let value = value.unwrap();
+        let Some(value) = value else {
+            continue;
+        };
         let task =
             match serde_path_to_error::deserialize::<_, interface::task::Task>(
                 &mut serde_json::Deserializer::from_slice(

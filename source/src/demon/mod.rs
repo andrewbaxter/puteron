@@ -108,6 +108,7 @@ use {
         walk_task_upstream,
     },
     tokio::{
+        runtime,
         select,
         signal::unix::SignalKind,
         spawn,
@@ -200,13 +201,14 @@ pub async fn main(debug: bool, log: &Log, args: DemonRunArgs) -> Result<(), loga
             let state = state.clone();
             let tasks_sync_load = tasks_sync_load.clone();
             let loaded_hashes = loaded_hashes.clone();
+            let rt = runtime::Handle::current();
             move || {
                 let ct = CancellationToken::new();
                 *bg.lock().unwrap() = Some(ct.clone().drop_guard());
                 let state = state.clone();
                 let tasks_sync_load = tasks_sync_load.clone();
                 let loaded_hashes = loaded_hashes.clone();
-                spawn(async move {
+                rt.spawn(async move {
                     let work = async {
                         sleep(Duration::from_secs(1)).await;
                         let mut errors = LogErrorHandler { log: state.log.clone() };

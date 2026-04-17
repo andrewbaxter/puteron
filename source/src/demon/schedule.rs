@@ -1,22 +1,14 @@
 use {
     super::state::StateDynamic,
-    crate::{
-        interface::{
-            self,
-            base::TaskId,
-            task::schedule::Timezone,
-        },
+    crate::interface::{
+        self,
+        base::TaskId,
+        task::schedule::Timezone,
     },
     chrono::{
-        DateTime,
-        Datelike,
-        Months,
-        Timelike,
-        Utc,
+        DateTime, Datelike, Months, Timelike, Utc
     },
-    rand::{
-        Rng,
-    },
+    rand::Rng,
     std::{
         collections::BTreeMap,
         sync::Arc,
@@ -35,23 +27,22 @@ pub(crate) enum ScheduleEvent {
 
 pub(crate) type ScheduleDynamic = BTreeMap<Instant, Vec<ScheduleEvent>>;
 
-pub fn calc_next_instant(
+pub fn calc_next(
     now: DateTime<Utc>,
-    instant_now: Instant,
     schedule: &interface::task::schedule::Rule,
     // At startup, for scattered rules
     initial: bool,
-) -> Instant {
+) -> DateTime<Utc> {
     let mut next;
     match schedule {
         interface::task::schedule::Rule::Period(s) => {
             if initial && s.scattered {
-                return instant_now +
+                return now +
                     Duration::from_secs_f64(
                         Duration::from(s.period.into()).as_secs_f64() * rand::rng().random_range::<f64, _>(0. .. 1.),
                     );
             } else {
-                return instant_now + s.period.into();
+                return now + std::time::Duration::from(s.period.into());
             }
         },
         interface::task::schedule::Rule::Hourly(s) => {
@@ -119,7 +110,61 @@ pub fn calc_next_instant(
             }
         },
     }
-    return instant_now + (next - now).to_std().unwrap();
+    return next;
+}
+
+#[cfg(test)]
+mod tests {
+use {crate::{demon::schedule::calc_next, interface::task::schedule::{Rule, RuleWeekly}}, chrono::{NaiveDate, NaiveDateTime, NaiveTime, Weekday}};
+#[test]
+fn test_calc_next_before() {
+    let now =
+        NaiveDateTime::new(
+            NaiveDate::from_ymd_opt(2026, 3, 10).unwrap(),
+            NaiveTime::from_hms_opt(22, 49, 0).unwrap(),
+        ).and_utc();
+    assert_eq!(
+        calc_next(now, &Rule::Weekly(RuleWeekly {
+            weekday: Weekday::Fri,
+            time: NaiveTime::from_hms_opt(5, 0, 0).unwrap(),
+            tz: None,
+        }), false),
+        NaiveDateTime::new(
+            NaiveDate::from_ymd_opt(2026, 3, 13).unwrap(),
+            NaiveTime::from_hms_opt(5, 0, 0).unwrap()
+        ).and_utc()
+    );
+}
+
+#[test]
+fn test_calc_next_after() {
+    let now =
+        NaiveDateTime::new(
+            NaiveDate::from_ymd_opt(2026, 3, 14).unwrap(),
+            NaiveTime::from_hms_opt(22, 49, 0).unwrap(),
+        ).and_utc();
+    assert_eq!(
+        calc_next(now, &Rule::Weekly(RuleWeekly {
+            weekday: Weekday::Fri,
+            time: NaiveTime::from_hms_opt(5, 0, 0).unwrap(),
+            tz: None,
+        }), false),
+        NaiveDateTime::new(
+            NaiveDate::from_ymd_opt(2026, 3, 20).unwrap(),
+            NaiveTime::from_hms_opt(5, 0, 0).unwrap()
+        ).and_utc()
+    );
+}
+}
+
+pub fn calc_next_instant(
+    now: DateTime<Utc>,
+    instant_now: Instant,
+    schedule: &interface::task::schedule::Rule,
+    // At startup, for scattered rules
+    initial: bool,
+) -> Instant {
+    return instant_now + (calc_next(now, schedule, initial) - now).to_std().unwrap();
 }
 
 pub(crate) fn pop_schedule(state_dynamic: &mut StateDynamic) -> Option<(Instant, ScheduleEvent)> {
